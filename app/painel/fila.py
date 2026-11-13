@@ -7,7 +7,7 @@ link para processar, um corte para narrar ou um lote de videos de um template. O
 import threading
 import time
 
-from app import banco, config, pipeline
+from app import avisos, banco, config, pipeline
 from app.download import baixar
 from app.busca import biblioteca
 from app.multiplicador import lote
@@ -67,6 +67,7 @@ def processar_proximo() -> bool:
         log.error("Fila: o item %d falhou: %s", item["id"], erro)
         banco.atualizar_fila(item["id"], estado="falhou", progresso=None,
                              resultado=str(erro)[:300], terminado_em=_agora())
+        avisos.avisar(f"❌ Falhou na fila: {item['rotulo'][:120]}\n{str(erro)[:300]}", chave=f"fila:{str(erro)[:80]}")
     else:
         banco.atualizar_fila(item["id"], estado="pronto", progresso=None,
                              resultado=resultado, terminado_em=_agora())
@@ -88,6 +89,7 @@ class Trabalhador(threading.Thread):
                     self._parar.wait(ESPERA_S)
             except Exception as erro:          # nunca deixa a thread morrer
                 log.error("Fila: erro inesperado: %s", erro)
+                avisos.avisar(f"⚠️ Erro inesperado na fila: {str(erro)[:300]}", chave="fila-inesperado")
                 self._parar.wait(ESPERA_S * 4)
 
     def parar(self) -> None:

@@ -2096,5 +2096,88 @@ class TestePainelHoje(unittest.TestCase):
         self.assertTrue({"busca_ativa", "busca_hora", "meta_cortes_dia", "apagar_brutos_dias"} <= chaves)
 
 
+class TesteAvisos(unittest.TestCase):
+    """Fase 7: avisos no Telegram so quando ligados, sem repetir e sem vazar o token."""
+
+    def setUp(self):
+        from app import avisos
+        self.av = avisos
+        avisos._enviados.clear()
+
+    def test_desligado_nao_manda_nada(self):
+        with mock.patch.dict(os.environ, {"CANAL_AVISOS": "", "TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "1"}), \
+                mock.patch("app.avisos.requests.post") as post:
+            self.assertFalse(self.av.avisar("oi", esperar=True))
+        post.assert_not_called()
+
+    def test_ligado_manda_uma_vez_por_chave(self):
+        ambiente = {"CANAL_AVISOS": "1", "TELEGRAM_BOT_TOKEN": "TOKEN-SECRETO", "TELEGRAM_CHAT_ID": "123"}
+        with mock.patch.dict(os.environ, ambiente), \
+                mock.patch("app.avisos.requests.post", return_value=SimpleNamespace(status_code=200)) as post:
+            self.assertTrue(self.av.avisar("Falhou X", chave="x", esperar=True))
+            self.assertFalse(self.av.avisar("Falhou X de novo", chave="x", esperar=True))
+            self.assertTrue(self.av.avisar("Outra coisa", chave="y", esperar=True))
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args.kwargs["json"]["chat_id"], "123")
+
+    def test_erro_de_rede_nao_quebra_nem_mostra_o_token(self):
+        import requests as _requests
+        ambiente = {"CANAL_AVISOS": "1", "TELEGRAM_BOT_TOKEN": "TOKEN-SECRETO", "TELEGRAM_CHAT_ID": "123"}
+        with mock.patch.dict(os.environ, ambiente), \
+                mock.patch("app.avisos.requests.post", side_effect=_requests.ConnectionError("https://api.telegram.org/botTOKEN-SECRETO")), \
+                self.assertLogs("canal.avisos", level="WARNING") as registro:
+            self.assertFalse(self.av.avisar("oi", esperar=True))
+        self.assertNotIn("TOKEN-SECRETO", "\n".join(registro.output))
+
+    def test_falha_da_busca_avisa(self):
+        from app.busca import diaria
+        banco.criar_tabelas()
+        with mock.patch.object(diaria.avisos, "avisar") as avisar, self.assertRaises(RuntimeError):
+            diaria.rodar(1, coletor=lambda: [])
+        self.assertIn("busca", avisar.call_args.args[0])
+
+
+class TesteVps(unittest.TestCase):
+    """Fase 7: painel de testes no computador e o que vai (e nao vai) para a VPS."""
+
+    def test_painel_de_teste_nao_liga_publicador_nem_busca(self):
+        from fastapi.testclient import TestClient
+        from app.painel import servidor
+        ambiente = {"CANAL_SEM_TRABALHADOR": "0", "CANAL_PAINEL_DE_TESTE": "1"}
+        with mock.patch.dict(os.environ, ambiente), \
+                mock.patch.object(servidor.fila.Trabalhador, "start") as trab, \
+                mock.patch.object(servidor.agendador.Publicador, "start") as pub, \
+                mock.patch.object(servidor.diaria.Buscador, "start") as bus:
+            with TestClient(servidor.criar_app()) as cliente:
+                self.assertIn("Painel de <b>testes</b>", cliente.get("/cortes").text)
+        trab.assert_called_once()
+        pub.assert_not_called()
+        bus.assert_not_called()
+
+    def test_env_da_vps_nao_leva_linhas_do_computador(self):
+        import importlib.util
+        especificacao = importlib.util.spec_from_file_location("publicar", Path(__file__).parent.parent / "deploy" / "publicar.py")
+        publicar = importlib.util.module_from_spec(especificacao)
+        especificacao.loader.exec_module(publicar)
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz = Path(tmp)
+            (raiz / ".env").write_text("ANTHROPIC_API_KEY=a\nCANAL_PAINEL_DE_TESTE=1\nCANAL_URL_PAINEL=http://127.0.0.1:8000\n"
+                                       "CANAL_VPS=ubuntu@1.2.3.4\nCANAL_CHAVE_SECRETA=k\n", encoding="utf-8")
+            with mock.patch.object(publicar, "RAIZ", raiz):
+                texto = publicar._env_para_vps(raiz).read_text(encoding="utf-8")
+        self.assertIn("ANTHROPIC_API_KEY=a", texto)
+        self.assertIn("CANAL_CHAVE_SECRETA=k", texto)
+        self.assertNotIn("CANAL_PAINEL_DE_TESTE", texto)
+        self.assertNotIn("CANAL_URL_PAINEL", texto)
+        self.assertNotIn("CANAL_VPS", texto)
+
+    def test_scripts_da_vps_tem_fim_de_linha_do_linux(self):
+        import subprocess as _sp
+        raiz = Path(__file__).parent.parent
+        for nome in ("deploy/instalar_vps.sh", "deploy/canal-dark.service"):
+            atributo = _sp.run(["git", "check-attr", "eol", nome], cwd=raiz, capture_output=True, text=True).stdout
+            self.assertIn("eol: lf", atributo, nome)
+
+
 if __name__ == "__main__":
     unittest.main()

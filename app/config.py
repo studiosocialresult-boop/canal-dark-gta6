@@ -4,6 +4,7 @@ Rodar sozinho mostra onde cada pasta esta:
     python -m app.config
 """
 import logging
+import logging.handlers
 import os
 from pathlib import Path
 
@@ -112,7 +113,10 @@ def criar_log(nome: str) -> logging.Logger:
         formato = logging.Formatter("%(asctime)s [%(name)s] %(message)s", "%d/%m %H:%M:%S")
         tela = logging.StreamHandler()
         tela.setFormatter(formato)
-        arquivo = logging.FileHandler(PASTA_LOGS / "canal.log", encoding="utf-8")
+        PASTA_LOGS.mkdir(parents=True, exist_ok=True)
+        # Ate 5 arquivos de 5 MB: o log nunca enche o disco da VPS.
+        arquivo = logging.handlers.RotatingFileHandler(PASTA_LOGS / "canal.log", maxBytes=5_000_000,
+                                                       backupCount=4, encoding="utf-8")
         arquivo.setFormatter(formato)
         raiz.addHandler(tela)
         raiz.addHandler(arquivo)

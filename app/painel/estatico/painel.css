@@ -567,3 +567,6 @@ code.codigo { display: block; padding: 8px 10px; border-radius: 9px; background:
   .rank-mini, .rank-num:nth-of-type(2) { display: none; }
   .rank-acao { grid-column: 2 / -1; }
 }
+
+/* Faixa do painel de testes (computador, depois que o principal foi para a VPS) */
+.faixa-teste { margin-bottom: 16px; padding: 10px 16px; border-radius: 12px; background: var(--aviso-fraco); color: var(--texto); font-size: .92rem; }

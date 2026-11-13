@@ -1,0 +1,25 @@
+# Servico do Canal Dark na VPS: liga o painel (com a fila, a busca diaria e o publicador)
+# quando a VPS liga e o reinicia sozinho se ele cair. Instalado pelo deploy/instalar_vps.sh.
+[Unit]
+Description=Canal Dark (painel, fila, busca diaria e publicacao)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/canal-dark
+Environment=PYTHONIOENCODING=utf-8
+Environment=PATH=/home/ubuntu/.deno/bin:/home/ubuntu/canal-dark/.venv/bin:/usr/local/bin:/usr/bin:/bin
+# Avisos no Telegram ligados so na VPS.
+Environment=CANAL_AVISOS=1
+# Endereco https do painel (rede privada do Tailscale). Fica fora da pasta do codigo para nao ser apagado
+# a cada atualizacao. Os valores daqui ganham dos do .env.
+EnvironmentFile=-/home/ubuntu/canal-dark-vps.env
+# Escuta so dentro da VPS; quem expoe o painel (com https, so para os seus aparelhos) e o "tailscale serve".
+ExecStart=/home/ubuntu/canal-dark/.venv/bin/python -m uvicorn app.painel.servidor:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=15
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

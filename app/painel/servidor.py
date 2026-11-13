@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app import banco, config
+from app import avisos, banco, config
 from app.download import baixar
 from app.busca import diaria
 from app.painel import api_busca, api_perfis, api_postagem, api_templates, fila
@@ -84,8 +84,12 @@ def criar_app() -> FastAPI:
     async def ciclo_de_vida(_app):
         if os.getenv("CANAL_SEM_TRABALHADOR") != "1":
             trabalhador.start()
-            publicador.start()
-            buscador.start()
+            # O painel de testes (no computador, depois de levar tudo para a VPS) nao publica nem busca
+            # sozinho: senao os mesmos posts sairiam duas vezes.
+            if not painel_de_teste():
+                publicador.start()
+                buscador.start()
+            avisos.avisar("✅ Painel Canal Dark ligado.", chave="painel-ligado")
         yield
         trabalhador.parar()
         publicador.parar()
@@ -96,7 +100,7 @@ def criar_app() -> FastAPI:
     paginas = Jinja2Templates(directory=PASTA / "paginas")
 
     def contexto(request: Request, ativa: str, **extra) -> dict:
-        return {"request": request, "menu": MENU, "ativa": ativa, **extra}
+        return {"request": request, "menu": MENU, "ativa": ativa, "painel_de_teste": painel_de_teste(), **extra}
 
     # ---------- paginas ----------
 
@@ -252,6 +256,11 @@ def criar_app() -> FastAPI:
 
 
 # ---------- ajudantes ----------
+
+def painel_de_teste() -> bool:
+    """Verdadeiro no computador depois que o painel principal foi para a VPS (CANAL_PAINEL_DE_TESTE=1 no .env)."""
+    return os.getenv("CANAL_PAINEL_DE_TESTE") == "1"
+
 
 def _corte_do_dono(corte_id: int):
     corte = banco.ler_corte(corte_id)

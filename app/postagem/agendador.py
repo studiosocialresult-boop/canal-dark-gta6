@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from app import banco, config, ia
+from app import avisos, banco, config, ia
 from app.multiplicador import renderizar, repositorio
 from app.postagem import contas, legenda, meta, tiktok, youtube
 from app.postagem.cofre import ErroCofre
@@ -279,6 +279,8 @@ def _tratar_falha(publicacao: dict, conta: dict, erro: ErroPostagem, momento_ago
     if erro.reconectar:
         contas.atualizar_conta(conta["id"], estado="expirada", erro=str(erro))
         contas.atualizar_publicacao(publicacao["id"], estado="agendada", erro=str(erro))
+        avisos.avisar(f"🔌 A conta {conta['nome']} ({REDES[conta['rede']]['nome']}) precisa ser conectada de novo "
+                      f"na tela Contas. Os posts dela ficam esperando.\n{str(erro)[:200]}", chave=f"reconectar:{conta['id']}")
         return "agendada"
     tentativas = publicacao["tentativas"] + 1
     if erro.temporario and tentativas < MAX_TENTATIVAS + 1:
@@ -287,6 +289,8 @@ def _tratar_falha(publicacao: dict, conta: dict, erro: ErroPostagem, momento_ago
                                     proxima_tentativa=texto((momento_agora or agora()) + timedelta(seconds=espera)))
         return "agendada"
     contas.atualizar_publicacao(publicacao["id"], estado="falhou", tentativas=tentativas, erro=str(erro))
+    avisos.avisar(f"❌ Um post não saiu em {conta['nome']} ({REDES[conta['rede']]['nome']}): "
+                  f"{publicacao['titulo'][:100]}\n{str(erro)[:250]}\nVeja na tela Agenda.", chave=f"post:{publicacao['id']}")
     return "falhou"
 
 
@@ -338,6 +342,7 @@ class Publicador(threading.Thread):
                 publicar_vencidas()
             except Exception as erro:            # nunca deixa a thread morrer
                 log.error("Publicador: erro inesperado: %s", erro)
+                avisos.avisar(f"⚠️ Erro inesperado no publicador: {str(erro)[:300]}", chave="publicador-inesperado")
             self._parar.wait(self.intervalo_s)
 
     def parar(self) -> None:

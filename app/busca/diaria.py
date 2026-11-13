@@ -18,7 +18,7 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from app import banco, config
+from app import avisos, banco, config
 from app.busca import perfil
 
 log = config.criar_log("busca")
@@ -242,6 +242,7 @@ def rodar(usuario_id: int = config.USUARIO_PADRAO, enfileirar: bool = True,
         log.info("Busca %d: %s.", busca_id, resumo)
     except Exception as erro:
         log.error("Busca %d falhou: %s", busca_id, erro)
+        avisos.avisar(f"❌ A busca de vídeos falhou: {str(erro)[:300]}", chave=f"busca:{dia}")
         with closing(banco.conectar()) as conexao, conexao:
             conexao.execute("UPDATE buscas SET estado = 'falhou', terminada_em = ?, erro = ? WHERE id = ?",
                             (_texto_utc(_agora_utc()), str(erro)[:300], busca_id))
@@ -333,10 +334,14 @@ def rodar_se_for_hora(usuario_id: int = config.USUARIO_PADRAO, agora: datetime |
     if not deve_rodar(usuario_id, agora):
         return False
     try:
-        rodar(usuario_id, coletor=coletor, agora=agora)
+        resultado = rodar(usuario_id, coletor=coletor, agora=agora)
     except Exception:
         return True            # ja registrado como "falhou"; tenta de novo depois de 30 minutos
-    limpar_brutos(usuario_id, agora)
+    apagados = limpar_brutos(usuario_id, agora)
+    avisos.avisar(f"🔎 Busca do dia pronta: {resultado['ranking']} vídeos no ranking, "
+                  f"{resultado['enfileirados']} enviados para a fila de cortes."
+                  + (f" {apagados} vídeo(s) antigo(s) apagado(s) do disco." if apagados else ""),
+                  chave=f"resumo:{resultado['busca_id']}")
     return True
 
 
@@ -357,6 +362,7 @@ class Buscador(threading.Thread):
                 rodar_se_for_hora()
             except Exception as erro:            # nunca deixa a thread morrer
                 log.error("Buscador: erro inesperado: %s", erro)
+                avisos.avisar(f"⚠️ Erro inesperado na busca diária: {str(erro)[:300]}", chave="buscador-inesperado")
             self._parar.wait(self.intervalo_s)
 
     def parar(self) -> None:

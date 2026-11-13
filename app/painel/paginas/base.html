@@ -94,6 +94,7 @@
   </header>
 
   <main class="conteudo">
+    {% if painel_de_teste %}<div class="faixa-teste">Painel de <b>testes</b> neste computador: não publica nas redes nem faz a busca diária. O painel principal está na VPS.</div>{% endif %}
     {% block conteudo %}{% endblock %}
   </main>
 </div>
