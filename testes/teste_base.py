@@ -1312,6 +1312,22 @@ class TesteParteB(unittest.TestCase):
         self.assertEqual(self.cliente.post(f"/api/templates/{ajuste}/gerar").json()["novas"], 1)
 
     @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_editor_comeca_em_caber_para_video_horizontal(self):
+        ajuste = self.cliente.post("/api/templates", json={"layout": "cheio"}).json()["id"]
+        template = self.cliente.post("/api/templates", json={"layout": "post"}).json()["id"]
+        self.ids += [ajuste, template]
+        for destino in (ajuste, template):
+            self.cliente.post(f"/api/templates/{destino}/upload?nome=zoo.mp4", content=self.VIDEO.read_bytes())
+        self.assertEqual(self.repo.listar_midias(ajuste)[0]["ajuste"], "caber")        # Editor + video horizontal
+        self.assertEqual(self.repo.listar_midias(template)[0]["ajuste"], "preencher")  # template: nao muda
+        # quem ja mexeu no enquadramento nao e sobrescrito
+        midia = self.repo.listar_midias(ajuste)[0]
+        self.repo.atualizar_midia(midia["id"], ajuste="preencher", zoom=1.4)
+        self.cliente.post(f"/api/templates/{ajuste}/midias", json={"cortes": []})
+        self.assertEqual(self.repo.ler_midia(midia["id"])["ajuste"], "preencher")
+        self.assertEqual(self.renderizar.dimensoes(self.VIDEO)[0] > self.renderizar.dimensoes(self.VIDEO)[1], True)
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
     def test_zip_com_todos_os_videos_prontos(self):
         import io, zipfile
         from app.painel import fila

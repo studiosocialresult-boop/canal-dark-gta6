@@ -65,6 +65,23 @@ def _url_do_avatar(t: dict) -> str | None:
     return f"/api/templates/{t['id']}/avatar?v={arquivo.stat().st_mtime_ns}" if arquivo.exists() else None
 
 
+def _ajuste_automatico(template: dict) -> None:
+    """No Editor, um video horizontal comeca em "caber inteiro": preencher a tela vertical cortaria
+    mais de dois tercos da imagem. O dono pode trocar depois (so vale para quem ainda nao mexeu)."""
+    if template["layout"] != "cheio":
+        return
+    for midia in repositorio.listar_midias(template["id"]):
+        if midia["ajuste"] != "preencher" or midia["zoom"] != 1 or midia["pos_x"] != 50 or midia["pos_y"] != 50:
+            continue
+        try:
+            arquivo, _inicio, _dur = renderizar.resolver_midia(midia)
+        except renderizar.ErroRender:
+            continue
+        largura, altura = renderizar.dimensoes(arquivo)
+        if largura > altura > 0:
+            repositorio.atualizar_midia(midia["id"], ajuste="caber")
+
+
 def _midia_json(m: dict) -> dict:
     arquivo = None
     if m["origem"] == "corte" and m["corte_id"]:
@@ -264,6 +281,7 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
                 raise HTTPException(404, "Vídeo não encontrado na biblioteca.")
         novos = repositorio.adicionar_cortes(template_id, ids, zona) if ids else 0
         novos += repositorio.adicionar_da_biblioteca(template_id, biblioteca, zona) if biblioteca else 0
+        _ajuste_automatico(repositorio.ler_template(template_id))
         return {"ok": True, "novos": novos}
 
     @app.post("/api/templates/{template_id}/upload")
@@ -282,6 +300,7 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
             raise HTTPException(400, "Esse arquivo não parece ser um vídeo válido.")
         midia_id = repositorio.adicionar_arquivo(
             template_id, config.caminho_relativo(destino), Path(seguro).stem, zona=2 if zona == 2 else 1)
+        _ajuste_automatico(repositorio.ler_template(template_id))
         return {"ok": True, "id": midia_id}
 
     @app.put("/api/templates/{template_id}/midias/{midia_id}")

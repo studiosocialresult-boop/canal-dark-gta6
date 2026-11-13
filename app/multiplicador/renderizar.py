@@ -49,6 +49,18 @@ def resolver_midia(midia: dict) -> tuple[Path, float | None, float | None]:
     return arquivo, None, None
 
 
+def dimensoes(arquivo: Path) -> tuple[int, int]:
+    """(largura, altura) do video. Devolve (0, 0) se nao conseguir ler."""
+    saida = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+         "-of", "csv=p=0", str(arquivo)], capture_output=True, text=True)
+    try:
+        largura, altura = (int(n) for n in saida.stdout.strip().split(",")[:2])
+        return largura, altura
+    except ValueError:
+        return 0, 0
+
+
 def duracao_do_arquivo(arquivo: Path) -> float:
     saida = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(arquivo)],
