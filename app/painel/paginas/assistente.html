@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block titulo %}Template{% endblock %}
+
+{% block conteudo %}
+<section class="cartao topo-assistente">
+  <a class="botao-icone" href="/templates" aria-label="Voltar para os templates" title="Voltar"><svg class="i"><use href="#i-esq"/></svg></a>
+  <input class="nome-template" id="nome" maxlength="80" aria-label="Nome do template" spellcheck="false">
+  <nav class="passos" id="passos" aria-label="Passos"></nav>
+  <button class="botao primario" id="continuar">Continuar<svg class="i"><use href="#i-dir"/></svg></button>
+</section>
+
+<div class="editor">
+  <section class="cartao painel-passo" id="passo"></section>
+  <aside class="coluna-previa">
+    <div class="celular carregando" id="celular"><img id="previa" alt="Prévia do vídeo"></div>
+    <div class="previa-controles" id="controles-frase">
+      <button id="frase-ant" aria-label="Frase anterior"><svg class="i" style="width:14px;height:14px"><use href="#i-esq"/></svg></button>
+      <span id="frase-pos">Frase</span>
+      <button id="frase-prox" aria-label="Próxima frase"><svg class="i" style="width:14px;height:14px"><use href="#i-dir"/></svg></button>
+    </div>
+    <div class="previa-controles" id="controles-midia">
+      <button id="midia-ant" aria-label="Vídeo anterior"><svg class="i" style="width:14px;height:14px"><use href="#i-esq"/></svg></button>
+      <span id="midia-pos">Vídeo</span>
+      <button id="midia-prox" aria-label="Próximo vídeo"><svg class="i" style="width:14px;height:14px"><use href="#i-dir"/></svg></button>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>window.TEMPLATE_ID = {{ template_id }};</script>
+<script src="/estatico/assistente.js"></script>
+{% endblock %}

@@ -832,5 +832,250 @@ class TestePainel(unittest.TestCase):
         self.assertEqual(linha["estado"], "aguardando")
 
 
+class TesteTemplates(unittest.TestCase):
+    """Templates: cartao, dados, frases (IA simulada), API do painel e lote de videos."""
+    VIDEO = Path(__file__).parent / "exemplo_zoo.mp4"
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        from fastapi.testclient import TestClient
+        from app.multiplicador import cartao, frases, lote, renderizar, repositorio
+        from app.painel import servidor
+        cls.cartao, cls.frases, cls.lote, cls.renderizar, cls.repo = cartao, frases, lote, renderizar, repositorio
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        banco.criar_tabelas()
+        self.ids = []
+        self.addCleanup(lambda: [self.repo.excluir_template(i) for i in self.ids])
+
+    def novo(self, layout="post"):
+        template_id = self.repo.criar_template(1, layout, "Teste")
+        self.ids.append(template_id)
+        return template_id
+
+    def png(self, lado=64):
+        import io
+        from PIL import Image
+        arquivo = io.BytesIO()
+        Image.new("RGB", (lado, lado), (200, 30, 90)).save(arquivo, "PNG")
+        return arquivo.getvalue()
+
+    # ---------- cartao ----------
+
+    def test_cartao_tem_zonas_certas_em_cada_layout(self):
+        for layout, zonas in (("post", {"video"}), ("meme", {"video"}), ("viral", {"video", "video2"})):
+            imagem, achadas = self.cartao.compor(layout, {}, "Uma frase de teste para o cartao")
+            self.assertEqual(imagem.size, (1080, 1920))
+            self.assertEqual(set(achadas), zonas, layout)
+            x, y, w, h = achadas["video"]
+            self.assertEqual(imagem.getpixel((x + w // 2, y + h // 2))[3], 0, "zona do video fica transparente")
+            self.assertTrue(0 <= y and y + h <= 1920 and h > 400, layout)
+
+    def test_frase_longa_encolhe_e_nao_corta(self):
+        longa = "Tudo que voce precisa saber sobre o GTA 6 em uma unica pagina feita para os fas mais exigentes " * 2
+        curta = "GTA 6"
+        _, zonas_longa = self.cartao.compor("meme", {}, longa)
+        _, zonas_curta = self.cartao.compor("meme", {}, curta)
+        self.assertGreaterEqual(zonas_longa["video"][1], zonas_curta["video"][1])      # faixa maior para frase maior
+        letra, linhas, _ = self.cartao.ajustar_texto(longa, 64, 950, 620, 1.18)
+        self.assertLessEqual(letra.size, 64)
+        self.assertEqual(" ".join(linhas), " ".join(longa.split()))                    # nenhuma palavra perdida
+
+    def test_ultima_linha_nao_fica_com_uma_palavra_so(self):
+        letra = self.cartao.fonte(64, True)
+        linhas = self.cartao.quebrar_equilibrado("A Rockstar anunciou um festival ao vivo em Miami para celebrar o GTA 6", letra, 900)
+        self.assertGreaterEqual(len(linhas[-1].split()), 2)
+
+    def test_emoji_e_removido_e_foto_invalida_nao_quebra(self):
+        self.assertEqual(self.cartao.limpar_texto("GTA 6 \U0001F525 chegou"), "GTA 6 chegou")
+        imagem, _ = self.cartao.compor("post", {"perfil": {"nome": "Teste"}}, "ok", avatar=Path("nao_existe.png"))
+        self.assertEqual(imagem.size, (1080, 1920))
+
+    # ---------- dados ----------
+
+    def test_config_so_guarda_o_que_mudou_e_mescla(self):
+        template_id = self.novo()
+        self.repo.atualizar_template(template_id, config_nova={"perfil": {"nome": "Minha Pagina"}})
+        self.repo.atualizar_template(template_id, config_nova={"perfil": {"handle": "minhapagina"}})
+        salva = self.repo.ler_template(template_id)["config"]
+        self.assertEqual(salva, {"perfil": {"nome": "Minha Pagina", "handle": "minhapagina"}})
+        completa = self.renderizar.modelos.config_completa(salva)
+        self.assertEqual(completa["perfil"]["tema"], "escuro")                      # padrao preservado
+
+    def test_cruzamento_cria_n_x_m_sem_duplicar(self):
+        template_id = self.novo()
+        for i in range(3):
+            self.repo.adicionar_arquivo(template_id, f"templates/x/v{i}.mp4", f"v{i}")
+        self.repo.adicionar_frases(template_id, ["Frase um", "Frase dois", "frase DOIS", "  ", "Frase tres"])
+        self.assertEqual(len(self.repo.listar_frases(template_id)), 3)             # vazia e repetida ficam de fora
+        self.assertEqual(self.repo.gerar_saidas(template_id), (9, 0))
+        self.assertEqual(self.repo.gerar_saidas(template_id), (0, 9))               # nada em dobro
+        midia = self.repo.listar_midias(template_id)[0]
+        self.repo.atualizar_midia(midia["id"], selecionada=False)
+        self.assertEqual(len(self.repo.combinacoes(template_id)[0]) * 3, 6)
+        self.assertEqual(self.repo.contagem_saidas(template_id)["total"], 9)
+
+    def test_saida_que_falhou_volta_para_a_fila(self):
+        template_id = self.novo()
+        self.repo.adicionar_arquivo(template_id, "templates/x/v.mp4", "v")
+        self.repo.adicionar_frases(template_id, ["Frase"])
+        self.repo.gerar_saidas(template_id)
+        saida = self.repo.proxima_saida(template_id)
+        self.repo.atualizar_saida(saida["id"], estado="falhou", erro="x")
+        self.assertEqual(self.repo.gerar_saidas(template_id), (0, 1))
+        self.assertEqual(self.repo.ler_saida(saida["id"])["estado"], "aguardando")
+
+    def test_midia_valida_ajustes(self):
+        template_id = self.novo()
+        midia = self.repo.adicionar_arquivo(template_id, "templates/x/v.mp4", "v")
+        self.repo.atualizar_midia(midia, zoom=9, pos_x=-5)
+        guardada = self.repo.ler_midia(midia)
+        self.assertEqual((guardada["zoom"], guardada["pos_x"]), (4.0, 0.0))        # limitado
+        with self.assertRaises(ValueError):
+            self.repo.atualizar_midia(midia, ajuste="esticar")
+        with self.assertRaises(KeyError):
+            self.repo.atualizar_midia(midia, origem="corte")
+
+    # ---------- frases com IA ----------
+
+    def test_frases_da_ia_sao_conferidas(self):
+        base = "A pagina perfeita para quem quer saber tudo do GTA 6"
+        boas = {"frases": ["Quer saber tudo do GTA 6?", "Tudo do GTA 6 em um lugar"]}
+        self.assertEqual(self.frases.validar_frases(boas, base, 2), [])
+        self.assertTrue(self.frases.validar_frases(boas, base, 3))                              # faltou uma
+        self.assertTrue(self.frases.validar_frases({"frases": ["Igual", "igual!"]}, base, 2))   # repetidas
+        self.assertTrue(self.frases.validar_frases({"frases": ["x" * 200, "ok"]}, base, 2))      # longa
+        self.assertTrue(self.frases.validar_frases({"frases": ["Olha isso \U0001F525", "ok"]}, base, 2))
+        self.assertTrue(self.frases.validar_frases({"frases": [base, "outra"]}, base, 2))        # copia da base
+
+    def test_gerar_variacoes_tenta_de_novo_se_vier_errado(self):
+        base = "A pagina perfeita para quem quer saber tudo do GTA 6"
+        cliente = ClienteFalso([resposta_falsa({"frases": ["So uma"]}),
+                                resposta_falsa({"frases": ["Quer saber tudo do GTA 6?", "Tudo do GTA 6 em um lugar"]})])
+        resultado = self.frases.gerar_variacoes(base, 2, usuario_id=1, cliente=cliente)
+        self.assertEqual(len(resultado), 2)
+        self.assertEqual(len(cliente.chamadas), 2)
+        self.assertNotIn("{{", cliente.chamadas[0]["system"])
+        with self.assertRaises(ValueError):
+            self.frases.gerar_variacoes("curta", 3, usuario_id=1)
+        with self.assertRaises(ValueError):
+            self.frases.gerar_variacoes(base, 99, usuario_id=1)
+
+    # ---------- API ----------
+
+    def test_api_cria_e_valida_configuracao(self):
+        r = self.cliente.post("/api/templates", json={"layout": "meme"})
+        self.assertEqual(r.status_code, 200)
+        template_id = r.json()["id"]
+        self.ids.append(template_id)
+        self.assertEqual(self.cliente.post("/api/templates", json={"layout": "inexistente"}).status_code, 400)
+        put = lambda **cfg: self.cliente.put(f"/api/templates/{template_id}", json={"config": cfg})   # noqa: E731
+        self.assertEqual(put(texto={"tamanho": 80}).status_code, 200)
+        self.assertEqual(put(texto={"tamanho": 9999}).status_code, 400)
+        self.assertEqual(put(texto={"cor": "vermelho"}).status_code, 400)
+        self.assertEqual(put(perfil={"tema": "neon"}).status_code, 400)
+        self.assertEqual(put(perfil={"avatar": "../../.env"}).status_code, 400)             # so pelo envio de imagem
+        self.assertEqual(put(segredo={"a": 1}).status_code, 400)
+        self.assertEqual(self.cliente.get("/api/templates/999999").status_code, 404)
+        pagina = self.cliente.get(f"/templates/{template_id}")
+        self.assertEqual(pagina.status_code, 200)
+        self.assertEqual(self.cliente.get("/templates").status_code, 200)
+
+    def test_api_avatar_so_aceita_imagem(self):
+        template_id = self.novo()
+        ruim = self.cliente.post(f"/api/templates/{template_id}/avatar?nome=foto.png", content=b"isto nao e uma imagem")
+        self.assertEqual(ruim.status_code, 400)
+        errada = self.cliente.post(f"/api/templates/{template_id}/avatar?nome=script.exe", content=self.png())
+        self.assertEqual(errada.status_code, 400)
+        boa = self.cliente.post(f"/api/templates/{template_id}/avatar?nome=foto.png", content=self.png())
+        self.assertEqual(boa.status_code, 200)
+        dados = self.cliente.get(f"/api/templates/{template_id}").json()
+        self.assertIsNotNone(dados["avatar_url"])
+        self.assertEqual(self.cliente.get(f"/api/templates/{template_id}/avatar").status_code, 200)
+        self.assertEqual(self.cliente.delete(f"/api/templates/{template_id}/avatar").status_code, 200)
+
+    def test_api_frases_e_perfis_salvos(self):
+        template_id = self.novo()
+        r = self.cliente.post(f"/api/templates/{template_id}/frases", json={"textos": ["Primeira", "Segunda", "primeira"]})
+        self.assertEqual(r.json()["novas"], 2)
+        self.assertEqual(r.json()["resumo"]["frases"], 2)
+        self.assertEqual(self.cliente.post(f"/api/templates/{template_id}/frases", json={"textos": ["x" * 300]}).status_code, 400)
+        frase = self.repo.listar_frases(template_id)[0]
+        self.cliente.put(f"/api/templates/{template_id}/frases/{frase['id']}", json={"selecionada": False})
+        self.assertEqual(self.cliente.get(f"/api/templates/{template_id}").json()["resumo"]["frases"], 1)
+        outro = self.novo()
+        self.assertEqual(self.cliente.delete(f"/api/templates/{template_id}/frases/{self.repo.listar_frases(outro)[0]['id']}").status_code, 404) \
+            if self.repo.listar_frases(outro) else None
+        # perfil salvo
+        self.cliente.put(f"/api/templates/{template_id}", json={"config": {"perfil": {"nome": "Pagina Salva", "handle": "salva"}}})
+        salvo = self.cliente.post(f"/api/templates/{template_id}/perfil-salvo", json={"rotulo": "Minha"}).json()["id"]
+        self.addCleanup(self.repo.excluir_perfil, salvo)
+        self.cliente.put(f"/api/templates/{outro}", json={"config": {"perfil": {"nome": "Outro"}}})
+        self.assertEqual(self.cliente.post(f"/api/templates/{outro}/perfil-salvo/{salvo}").status_code, 200)
+        self.assertEqual(self.repo.ler_template(outro)["config"]["perfil"]["nome"], "Pagina Salva")
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_upload_previa_e_lote_de_verdade(self):
+        template_id = self.novo("post")
+        self.assertEqual(self.cliente.post(f"/api/templates/{template_id}/upload?nome=virus.exe", content=b"x").status_code, 400)
+        self.assertEqual(self.cliente.post(f"/api/templates/{template_id}/upload?nome=fake.mp4", content=b"nao sou video").status_code, 400)
+        enviado = self.cliente.post(f"/api/templates/{template_id}/upload?nome=zoo.mp4", content=self.VIDEO.read_bytes())
+        self.assertEqual(enviado.status_code, 200)
+        self.cliente.post(f"/api/templates/{template_id}/frases", json={"textos": ["Frase um do lote", "Frase dois do lote"]})
+
+        previa = self.cliente.get(f"/api/templates/{template_id}/previa.jpg")
+        self.assertEqual(previa.status_code, 200)
+        self.assertEqual(previa.headers["content-type"], "image/jpeg")
+        miniatura = self.cliente.get(f"/api/templates/{template_id}/midias/{enviado.json()['id']}/miniatura.jpg")
+        self.assertEqual(miniatura.status_code, 200)
+
+        self.assertEqual(self.cliente.get(f"/api/templates/{template_id}").json()["resumo"]["total"], 2)
+        gerar = self.cliente.post(f"/api/templates/{template_id}/gerar")
+        self.assertEqual(gerar.json()["novas"], 2)
+        self.assertEqual(self.cliente.post(f"/api/templates/{template_id}/gerar").status_code, 409)     # ja na fila
+
+        from app.painel import fila
+        self.assertTrue(fila.processar_proximo())                                  # a fila gera os 2 videos
+        saidas = self.cliente.get(f"/api/templates/{template_id}/saidas").json()
+        self.assertEqual(saidas["contagem"]["pronto"], 2, saidas)
+        primeira = saidas["saidas"][0]
+        baixado = self.cliente.get(primeira["url"] + "?baixar=1")
+        self.assertEqual(baixado.status_code, 200)
+        self.assertIn("attachment", baixado.headers.get("content-disposition", ""))
+        arquivo = config.caminho_absoluto(self.repo.ler_saida(primeira["id"])["arquivo"])
+        self.assertAlmostEqual(self.renderizar.duracao_do_arquivo(arquivo), 19.0, delta=1.0)
+        self.assertEqual(self.cliente.get(f"/api/templates/{template_id}/saidas/99999.mp4").status_code, 404)
+        self.assertEqual(self.cliente.delete(f"/api/templates/{template_id}").status_code, 200)   # apagar leva os arquivos
+        self.assertFalse(arquivo.exists())
+        self.ids.remove(template_id)
+
+    def test_um_video_que_falha_nao_derruba_o_lote(self):
+        template_id = self.novo()
+        for i in range(2):
+            self.repo.adicionar_arquivo(template_id, f"templates/x/v{i}.mp4", f"v{i}")
+        self.repo.adicionar_frases(template_id, ["Frase"])
+        self.repo.gerar_saidas(template_id)
+        efeitos = [self.renderizar.ErroRender("video corrompido"), Path("ok.mp4")]
+        with mock.patch.object(self.lote.renderizar, "renderizar_saida", side_effect=efeitos) as renderiza:
+            # o mock nao atualiza o banco; marcamos como o render de verdade faria
+            def faz(saida_id):
+                efeito = efeitos.pop(0)
+                self.repo.atualizar_saida(saida_id, estado="falhou" if isinstance(efeito, Exception) else "pronto")
+                if isinstance(efeito, Exception):
+                    raise efeito
+            renderiza.side_effect = faz
+            resumo = self.lote.processar_template(template_id)
+        self.assertEqual(renderiza.call_count, 2)
+        self.assertIn("1 prontos, 1 com falha", resumo)
+
+    def test_apagar_template_em_geracao_e_recusado(self):
+        template_id = self.novo()
+        banco.enfileirar(1, "lote", str(template_id), "x")
+        self.assertEqual(self.cliente.delete(f"/api/templates/{template_id}").status_code, 409)
+        self.addCleanup(lambda: __import__("sqlite3").connect(config.ARQUIVO_BANCO).execute("DELETE FROM fila").connection.commit())
+
+
 if __name__ == "__main__":
     unittest.main()

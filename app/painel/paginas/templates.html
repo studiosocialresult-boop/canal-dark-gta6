@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block titulo %}Templates{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-camadas"/></svg></div>
+  <div>
+    <h1>Templates</h1>
+    <p>Monte o visual uma vez (foto e nome da página, frase, vídeo) e gere dezenas de vídeos de uma só vez: 10 vídeos e 5 frases viram 50.</p>
+  </div>
+  <div class="acoes">
+    <button class="botao primario" id="novo-template"><svg class="i"><use href="#i-mais"/></svg>Novo template</button>
+  </div>
+</section>
+
+<section class="grade-templates" id="grade-templates"></section>
+
+<div class="fundo-modal" id="modal-layout">
+  <div class="modal largo" style="position:relative">
+    <button class="botao-icone fechar" id="layout-fechar" aria-label="Fechar"><svg class="i"><use href="#i-x"/></svg></button>
+    <div class="modal-simples">
+      <div>
+        <h2>Escolha um modelo</h2>
+        <p class="dica" style="margin:6px 0 0">Você pode trocar de modelo depois, no passo "Zonas".</p>
+      </div>
+      <div class="cartoes-layout" id="opcoes-layout"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/templates.js"></script>{% endblock %}

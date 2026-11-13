@@ -5,6 +5,7 @@ anthropic
 python-dotenv
 fastapi
 jinja2
+pillow
 uvicorn
 apscheduler
 requests

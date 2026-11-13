@@ -12,6 +12,26 @@ from contextlib import closing
 from app import config
 from app.contratos import CorteProposto, Roteiro
 
+FILA_SQL = """
+-- Fila de trabalho do painel: um item por vez e processado, na ordem de chegada.
+-- tipo: "link" (processar um video), "narrar" (narrar um corte; alvo = id do corte) ou
+-- "lote" (gerar os videos de um template; alvo = id do template).
+-- estado: aguardando -> processando -> pronto (ou falhou)
+CREATE TABLE IF NOT EXISTS fila (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    tipo TEXT NOT NULL CHECK (tipo IN ('link', 'narrar', 'lote')),
+    alvo TEXT NOT NULL,
+    rotulo TEXT NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'aguardando',
+    progresso TEXT,
+    resultado TEXT,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    iniciado_em TEXT,
+    terminado_em TEXT
+);
+"""
+
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS usuarios (
     id INTEGER PRIMARY KEY,
@@ -82,12 +102,13 @@ CREATE TABLE IF NOT EXISTS narracoes (
 );
 
 -- Fila de trabalho do painel: um item por vez e processado, na ordem de chegada.
--- tipo: "link" (processar um video) ou "narrar" (gerar narracao de um corte; alvo = id do corte).
+-- tipo: "link" (processar um video), "narrar" (narrar um corte; alvo = id do corte) ou
+-- "lote" (gerar os videos de um template; alvo = id do template).
 -- estado: aguardando -> processando -> pronto (ou falhou)
 CREATE TABLE IF NOT EXISTS fila (
     id INTEGER PRIMARY KEY,
     usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
-    tipo TEXT NOT NULL CHECK (tipo IN ('link', 'narrar')),
+    tipo TEXT NOT NULL CHECK (tipo IN ('link', 'narrar', 'lote')),
     alvo TEXT NOT NULL,
     rotulo TEXT NOT NULL,
     estado TEXT NOT NULL DEFAULT 'aguardando',
@@ -96,6 +117,68 @@ CREATE TABLE IF NOT EXISTS fila (
     criado_em TEXT NOT NULL DEFAULT (datetime('now')),
     iniciado_em TEXT,
     terminado_em TEXT
+);
+
+-- Perfis de pagina salvos (foto, nome, @, tema...) para reutilizar em varios templates.
+CREATE TABLE IF NOT EXISTS perfis_pagina (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    rotulo TEXT NOT NULL,
+    dados TEXT NOT NULL,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Templates: um layout (post, meme ou viral) e a configuracao do assistente (JSON).
+-- estado: rascunho -> pronto (tem midia e frase) ; passo = ultimo passo do assistente aberto.
+CREATE TABLE IF NOT EXISTS templates (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    nome TEXT NOT NULL,
+    layout TEXT NOT NULL CHECK (layout IN ('post', 'meme', 'viral')),
+    config TEXT NOT NULL DEFAULT '{}',
+    passo INTEGER NOT NULL DEFAULT 1,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Videos do template. origem: "corte" (trecho do video original, sem legenda), "upload" ou "perfil".
+-- zona: 1 (principal) ou 2 (segunda zona do layout viral).
+CREATE TABLE IF NOT EXISTS template_midias (
+    id INTEGER PRIMARY KEY,
+    template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+    origem TEXT NOT NULL CHECK (origem IN ('corte', 'upload', 'perfil')),
+    corte_id INTEGER REFERENCES cortes(id),
+    arquivo TEXT,
+    rotulo TEXT NOT NULL,
+    zona INTEGER NOT NULL DEFAULT 1,
+    ajuste TEXT NOT NULL DEFAULT 'preencher',
+    zoom REAL NOT NULL DEFAULT 1,
+    pos_x REAL NOT NULL DEFAULT 50,
+    pos_y REAL NOT NULL DEFAULT 50,
+    selecionada INTEGER NOT NULL DEFAULT 1,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS template_frases (
+    id INTEGER PRIMARY KEY,
+    template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+    texto TEXT NOT NULL,
+    origem TEXT NOT NULL DEFAULT 'manual',
+    selecionada INTEGER NOT NULL DEFAULT 1,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Um video gerado = uma midia x uma frase. estado: aguardando -> renderizando -> pronto (ou falhou).
+CREATE TABLE IF NOT EXISTS template_saidas (
+    id INTEGER PRIMARY KEY,
+    template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+    midia_id INTEGER NOT NULL REFERENCES template_midias(id) ON DELETE CASCADE,
+    frase_id INTEGER NOT NULL REFERENCES template_frases(id) ON DELETE CASCADE,
+    estado TEXT NOT NULL DEFAULT 'aguardando',
+    arquivo TEXT,
+    erro TEXT,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (template_id, midia_id, frase_id)
 );
 
 -- Cada chamada paga a um servico de IA, para medir o custo por corte.
@@ -135,10 +218,22 @@ def criar_tabelas() -> None:
     """Cria as tabelas que faltam e o usuario padrao. Pode rodar quantas vezes quiser."""
     with closing(conectar()) as conexao, conexao:
         conexao.executescript(ESQUEMA)
+        _migrar_fila(conexao)
         conexao.execute(
             "INSERT OR IGNORE INTO usuarios (id, nome) VALUES (?, ?)",
             (config.USUARIO_PADRAO, "dono"),
         )
+
+
+def _migrar_fila(conexao: sqlite3.Connection) -> None:
+    """Bancos criados antes do tipo "lote" tem a fila com a regra antiga: refaz a tabela."""
+    linha = conexao.execute("SELECT sql FROM sqlite_master WHERE name = 'fila'").fetchone()
+    if linha is None or "'lote'" in linha["sql"]:
+        return
+    conexao.execute("ALTER TABLE fila RENAME TO fila_antiga")
+    conexao.executescript(FILA_SQL)
+    conexao.execute("INSERT INTO fila SELECT * FROM fila_antiga")
+    conexao.execute("DROP TABLE fila_antiga")
 
 
 # ---------- configuracoes por usuario ----------

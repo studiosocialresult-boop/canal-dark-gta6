@@ -1,7 +1,7 @@
 """Trabalhador da fila: processa, um por vez, o que foi pedido no painel.
 
 Roda em uma thread dentro do proprio painel. Cada item da tabela `fila` e um
-link para processar ou um corte para narrar. O que falha fica marcado como
+link para processar, um corte para narrar ou um lote de videos de um template. O que falha fica marcado como
 "falhou" com a mensagem, sem derrubar o painel nem os itens seguintes.
 """
 import threading
@@ -9,6 +9,7 @@ import time
 
 from app import banco, config, pipeline
 from app.download import baixar
+from app.multiplicador import lote
 
 log = config.criar_log("fila")
 
@@ -44,6 +45,8 @@ def executar(item) -> str:
     if item["tipo"] == "narrar":
         pipeline.narrar_e_renderizar(int(item["alvo"]), progresso=avisar)
         return "Narração pronta"
+    if item["tipo"] == "lote":
+        return lote.processar_template(int(item["alvo"]), progresso=avisar)
     raise ValueError(f"Tipo de item desconhecido: {item['tipo']}")
 
 

@@ -57,7 +57,7 @@
   {% for m in menu %}
   <a class="item-menu {{ 'ativo' if m.id == ativa }}" href="/{{ m.id }}">
     <svg class="i"><use href="#i-{{ m.icone }}"/></svg>{{ m.nome }}
-    {% if m.fase > 3 %}<span class="fase">Fase {{ m.fase }}</span>{% endif %}
+    {% if not m.pronto and m.fase > 3 %}<span class="fase">Fase {{ m.fase }}</span>{% endif %}
   </a>
   {% endfor %}
 

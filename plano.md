@@ -200,6 +200,11 @@ Evitar `max`: custa muito e costuma pensar demais.
 - Tela **Perfis** (analisador): colar @ ou link, listar os posts com filtros (mais vistos, mais curtidos, mais comentados, mais recentes, velocidade), selecionar e baixar em lote. YouTube pela API oficial. Instagram e TikTok dependem de coleta não oficial, que é instável: implementar por último, isolada num módulo que pode ser trocado.
 - **Pronto quando:** 3 vídeos e 3 frases geram 9 vídeos corretos, com a prévia ao vivo batendo com o resultado.
 - **Modelo:** Sonnet 5.5; Opus 5.5 se o ffmpeg complicar.
+- **Andamento (13/11/2026) — parte A, Templates: construída.**
+  - Pronto: tela Templates (lista com capa, estado e contadores) e o assistente de 7 passos com **prévia ao vivo desenhada pelo servidor** (mesmo código do vídeo final, então "o que você vê é o que sai"). Layouts post, meme e viral; perfil com foto, tema, alinhamento e tamanhos; perfis salvos; frases escritas ou geradas pela IA (Haiku, `prompts/frases_variacoes.md`); vídeos vindos de cortes (trecho do original, sem legenda) ou enviados do computador, com zoom e posição; estilo do texto; seleção de variações com contador; geração em lote pela fila (um vídeo por vez, progresso `N/M`) e download individual ou de todos.
+  - Código: `app/multiplicador/` (`modelos`, `cartao` com Pillow, `renderizar` com ffmpeg, `frases`, `lote`, `repositorio`) e `app/painel/api_templates.py`. Tabelas novas: `templates`, `template_midias`, `template_frases`, `template_saidas`, `perfis_pagina`; a fila ganhou o tipo `lote`.
+  - Medido: 1 vídeo de 32 s no layout post leva cerca de 12 s para renderizar neste computador (50 variações de vídeos curtos: uns 10 a 15 minutos).
+  - **Falta (parte B):** tela **Perfis** (analisador do YouTube e envio para Cortes), tela **Editor**, **regra contra repetição** (entra junto com o agendador, Fase 5) e o botão "Baixar tudo" em .zip (hoje baixa um por vez).
 
 ### Fase 5 — Postagem e agendamento
 - Ordem: YouTube Shorts primeiro (API mais simples), depois Instagram Reels, Facebook e TikTok.

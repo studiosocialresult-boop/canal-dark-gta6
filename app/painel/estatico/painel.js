@@ -46,6 +46,21 @@ const Painel = (() => {
 
   const dolar = (v) => "US$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  /** Esquema desenhado de cada layout (as zonas do vídeo ficam em destaque). */
+  function esquemaDeLayout(layout) {
+    const cor = "var(--suave)", video = "var(--acento)";
+    const linhas = (x, y, n) => Array.from({ length: n }, (_, i) =>
+      `<rect x="${x}" y="${y + i * 9}" width="${i === n - 1 ? 46 : 80}" height="4" rx="2" fill="${cor}" opacity=".55"/>`).join("");
+    const base = `<rect x="1" y="1" width="118" height="210" rx="12" fill="none" stroke="${cor}" opacity=".5" stroke-width="2"/>`;
+    const corpos = {
+      post: `<circle cx="22" cy="24" r="9" fill="${cor}" opacity=".6"/><rect x="36" y="18" width="34" height="5" rx="2.5" fill="${cor}" opacity=".7"/><rect x="36" y="27" width="24" height="4" rx="2" fill="${cor}" opacity=".4"/>
+             ${linhas(12, 44, 3)}<rect x="1" y="80" width="118" height="125" fill="${video}" opacity=".28"/>`,
+      meme: `${linhas(20, 18, 3)}<rect x="1" y="54" width="118" height="116" fill="${video}" opacity=".28"/><circle cx="46" cy="190" r="8" fill="${cor}" opacity=".6"/><rect x="58" y="185" width="32" height="5" rx="2.5" fill="${cor}" opacity=".6"/>`,
+      viral: `<rect x="1" y="1" width="118" height="84" fill="${video}" opacity=".28"/>${linhas(18, 94, 2)}<rect x="1" y="126" width="118" height="84" fill="${video}" opacity=".18"/>`,
+    };
+    return `<svg class="esquema" viewBox="0 0 120 212">${base}${corpos[layout]}</svg>`;
+  }
+
   // ---------- tema ----------
   function trocarTema() {
     const escuro = document.documentElement.dataset.tema !== "escuro";
@@ -184,6 +199,6 @@ const Painel = (() => {
   atualizarGasto();
   atualizarFila();
 
-  return { $, esc, icone, api, aviso, dolar, abrirNovo, abrirGaveta, atualizarGasto,
+  return { $, esc, icone, api, aviso, dolar, abrirNovo, abrirGaveta, atualizarGasto, esquemaDeLayout,
            fila: () => itensDaFila };
 })();
