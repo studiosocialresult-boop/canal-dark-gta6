@@ -75,6 +75,12 @@ CONFIG_PADRAO = {
     "janela_fim": 22,              # ultima hora (exclusiva)
     "modo_automatico": 0,          # 1: aprova e agenda sozinho os cortes com nota alta (desligado por padrao)
     "nota_minima_automatico": 80,  # nota minima para o modo automatico aprovar um corte
+    # Busca diaria
+    "busca_ativa": 0,              # 1: busca sozinha todo dia e manda os melhores para a fila (gasta creditos de IA)
+    "busca_hora": 6,               # hora do dia (fuso local) em que a busca roda
+    "busca_janela_h": 48,          # so entram videos postados nas ultimas N horas
+    "meta_cortes_dia": 15,         # quantos cortes novos por dia a busca tenta gerar
+    "apagar_brutos_dias": 7,       # videos baixados mais velhos que isso saem do disco (cortes ficam)
 }
 
 

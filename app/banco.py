@@ -259,6 +259,51 @@ CREATE TABLE IF NOT EXISTS publicacoes (
 CREATE UNIQUE INDEX IF NOT EXISTS publicacao_unica_por_conta
     ON publicacoes (conta_id, chave_video) WHERE estado != 'cancelada';
 
+-- Busca diaria (Fase 6): canais acompanhados, cada execucao da busca e o ranking que ela montou.
+CREATE TABLE IF NOT EXISTS canais_monitorados (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    url TEXT NOT NULL,
+    nome TEXT NOT NULL,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (usuario_id, url)
+);
+-- estado: rodando -> pronta (ou falhou)
+CREATE TABLE IF NOT EXISTS buscas (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    dia TEXT NOT NULL,
+    iniciada_em TEXT NOT NULL DEFAULT (datetime('now')),
+    terminada_em TEXT,
+    estado TEXT NOT NULL DEFAULT 'rodando',
+    resumo TEXT,
+    erro TEXT
+);
+-- Uma linha por video encontrado. destino: enfileirado / ja_processado / fora_da_meta / ignorado.
+CREATE TABLE IF NOT EXISTS ranking (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    busca_id INTEGER NOT NULL REFERENCES buscas(id),
+    dia TEXT NOT NULL,
+    plataforma TEXT NOT NULL DEFAULT 'youtube',
+    id_externo TEXT NOT NULL,
+    url TEXT NOT NULL,
+    titulo TEXT,
+    canal TEXT,
+    duracao_s REAL,
+    views INTEGER,
+    publicado TEXT,
+    horas REAL,
+    velocidade REAL,
+    aceleracao REAL,
+    origem TEXT NOT NULL,
+    posicao INTEGER NOT NULL,
+    destino TEXT NOT NULL,
+    motivo TEXT,
+    coletado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ranking_por_video ON ranking (usuario_id, id_externo, coletado_em);
+
 -- Cada chamada paga a um servico de IA, para medir o custo por corte.
 CREATE TABLE IF NOT EXISTS uso_api (
     id INTEGER PRIMARY KEY,

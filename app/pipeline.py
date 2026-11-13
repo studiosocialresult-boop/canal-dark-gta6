@@ -209,10 +209,8 @@ def renderizar_corte(corte_id: int) -> Path:
     linha = banco.ler_corte(corte_id)
     registro = banco.ler_video(linha["video_id"])
     transcricao = Transcricao.carregar(config.PASTA_TRANSCRICOES / f"{linha['video_id']}.json")
-    video = VideoBaixado(
-        plataforma=registro["plataforma"], id_externo=registro["id_externo"], url=registro["url"],
-        titulo=registro["titulo"] or "", canal=registro["canal"] or "",
-        duracao_s=registro["duracao_s"] or 0.0, caminho=config.caminho_absoluto(registro["caminho_arquivo"]))
+    # Se o video bruto foi apagado pela limpeza do disco, baixa de novo.
+    video = _etapa_download(linha["video_id"], registro["url"])
     return _renderizar(linha, linha["usuario_id"], video, transcricao)
 
 

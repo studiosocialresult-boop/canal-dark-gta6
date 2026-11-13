@@ -240,7 +240,12 @@ Evitar `max`: custa muito e costuma pensar demais.
 - Ordenar pela velocidade, descartar repetidos (o banco guarda o que já foi processado) e mandar os primeiros da lista para o pipeline, até a meta diária de cortes.
 - O painel mostra o ranking do dia com visualizações, horas desde a postagem e velocidade, para o dono entender por que cada vídeo foi escolhido.
 - **Limpeza do disco:** a rotina diária apaga os vídeos brutos com mais de 7 dias (configurável). Os cortes prontos e o registro no banco ficam.
-- **Pronto quando:** a rotina roda sozinha 3 dias seguidos no computador e os cortes aparecem na fila.
+- **Como ficou (13/11/2026):** a busca usa o próprio yt-dlp (pesquisas do YouTube ordenadas por visualizações, "esta semana" e "hoje"), **sem chave de API do Google** — só entram títulos com "GTA 6" ou "GTA VI" (não o GTA V). Também lê os canais acompanhados. Vídeos acima de 45 min ou abaixo de 40 s são ignorados. Tela **Hoje** mostra o ranking (views, horas, velocidade, "Acelerando"), os canais acompanhados e o histórico; botões **Buscar agora** e **Só atualizar** (sem mandar nada para a fila). Cada vídeo fora da meta tem **Gerar cortes**.
+  - **Meta:** `meta_cortes_dia` (15) ÷ média de cortes por vídeo = quantos vídeos vão para a fila; buscas repetidas no mesmo dia não passam da meta.
+  - **Automática desligada por padrão** (`busca_ativa`), porque cada vídeo na fila gasta créditos de IA. Ligue em Configurações; roda na hora escolhida (padrão 6h de Brasília), tenta de novo em 30 min se falhar (até 3 vezes) e roda no mesmo dia se o painel só abrir depois da hora.
+  - **Limpeza:** apaga os vídeos brutos com mais de 7 dias; se um corte precisar do original depois (ex.: narrar), ele é baixado de novo.
+  - **Instagram/TikTok:** continuam fora da busca (sem API oficial de "em alta").
+- **Pronto quando:** a rotina roda sozinha 3 dias seguidos no computador e os cortes aparecem na fila. *(Falta o dono ligar a busca automática e deixar o painel aberto por 3 dias.)*
 - **Modelo:** Sonnet 5.5
 
 ### Fase 7 — VPS

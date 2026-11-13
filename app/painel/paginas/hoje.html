@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block titulo %}Hoje{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-sol"/></svg></div>
+  <div>
+    <h1>Hoje</h1>
+    <p>Os vídeos de GTA 6 que mais crescem agora: visualizações por hora desde a postagem. Os primeiros vão sozinhos para a fila de cortes até a meta do dia.</p>
+  </div>
+  <div class="acoes">
+    <button class="botao" id="buscar-sem-fila" title="Atualiza o ranking sem mandar nada para a fila"><svg class="i"><use href="#i-busca"/></svg>Só atualizar</button>
+    <button class="botao primario" id="buscar-agora"><svg class="i"><use href="#i-play"/></svg>Buscar agora</button>
+  </div>
+</section>
+
+<section class="numeros">
+  <div class="cartao numero"><div class="brilho" style="background:var(--acento)"></div><small>Busca automática</small><strong id="n-estado">–</strong><em id="n-proxima">&nbsp;</em></div>
+  <div class="cartao numero"><div class="brilho" style="background:var(--ok)"></div><small>No ranking</small><strong id="n-ranking">–</strong><em id="n-janela">&nbsp;</em></div>
+  <div class="cartao numero"><div class="brilho" style="background:#ff4f8b"></div><small>Enviados à fila hoje</small><strong id="n-fila">–</strong><em id="n-meta">&nbsp;</em></div>
+</section>
+
+<div class="cartao aviso-busca" id="aviso-busca" hidden></div>
+
+<section id="ranking"></section>
+
+<section class="cartao" style="margin-top:16px">
+  <h3 style="margin:0 0 4px">Canais acompanhados</h3>
+  <p class="dica" style="margin:0 0 12px">Os vídeos novos destes canais entram no ranking junto com a busca por GTA 6.</p>
+  <form class="linha-form" id="form-canal">
+    <label class="busca" style="max-width:none;flex:1"><svg class="i"><use href="#i-link"/></svg>
+      <input id="canal-novo" type="text" placeholder="@nomedocanal ou o link do canal" autocomplete="off" spellcheck="false"></label>
+    <button class="botao" type="submit" id="canal-add">Acompanhar</button>
+  </form>
+  <div class="erro-texto" id="canal-erro" style="margin-top:6px"></div>
+  <div class="chips" id="canais"></div>
+</section>
+
+<section class="cartao" style="margin-top:16px">
+  <h3 style="margin:0 0 8px">Últimas buscas</h3>
+  <div id="historico"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/hoje.js"></script>{% endblock %}

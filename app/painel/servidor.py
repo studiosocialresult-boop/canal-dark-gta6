@@ -19,7 +19,8 @@ from fastapi.templating import Jinja2Templates
 
 from app import banco, config
 from app.download import baixar
-from app.painel import api_perfis, api_postagem, api_templates, fila
+from app.busca import diaria
+from app.painel import api_busca, api_perfis, api_postagem, api_templates, fila
 from app.postagem import agendador
 
 PASTA = Path(__file__).resolve().parent
@@ -31,7 +32,7 @@ ESTADOS_QUE_O_DONO_ESCOLHE = ("renderizado", "aprovado", "descartado")
 
 # Telas do menu. "fase" diz quando cada uma nasce; as que ainda nao existem avisam isso.
 MENU = [
-    {"id": "hoje", "nome": "Hoje", "icone": "sol", "fase": 6,
+    {"id": "hoje", "nome": "Hoje", "icone": "sol", "fase": 6, "pronto": True,
      "descricao": "O ranking do dia: os vídeos de GTA 6 que mais estão crescendo agora."},
     {"id": "cortes", "nome": "Cortes", "icone": "tesoura", "fase": 3, "pronto": True, "descricao": ""},
     {"id": "templates", "nome": "Templates", "icone": "camadas", "fase": 4, "pronto": True,
@@ -61,6 +62,14 @@ CONFIGURACOES = [
      "Desligado: só vai para as redes o que você aprovar. Ligado: cortes com nota alta são aprovados e agendados sozinhos "
      "(menos no TikTok, que exige sua confirmação em cada post).", 0, 1, ""),
     ("nota_minima_automatico", "Nota mínima no modo automático", "Só cortes com esta nota ou mais são aprovados sozinhos.", 50, 100, ""),
+    ("busca_ativa", "Busca diária automática",
+     "Ligado: todo dia, na hora escolhida, o programa procura os vídeos de GTA 6 que mais crescem e manda os melhores "
+     "para a fila (isso usa créditos da IA). Desligado: você só busca quando clicar em “Buscar agora” na tela Hoje.", 0, 1, ""),
+    ("busca_hora", "Hora da busca diária", "Hora do dia (horário de Brasília) em que a busca roda.", 0, 23, "h"),
+    ("busca_janela_h", "Só vídeos dos últimos…", "Vídeos postados há mais tempo que isso não entram no ranking.", 6, 168, "h"),
+    ("meta_cortes_dia", "Meta de cortes por dia", "A busca manda vídeos para a fila até chegar perto desse número de cortes.", 3, 60, ""),
+    ("apagar_brutos_dias", "Apagar vídeos baixados com mais de…",
+     "Libera espaço no disco. Os cortes prontos e o registro ficam; se precisar do original, ele é baixado de novo.", 1, 60, "dias"),
 ]
 
 
@@ -69,15 +78,18 @@ def criar_app() -> FastAPI:
     banco.criar_tabelas()
     trabalhador = fila.Trabalhador()
     publicador = agendador.Publicador()
+    buscador = diaria.Buscador()
 
     @asynccontextmanager
     async def ciclo_de_vida(_app):
         if os.getenv("CANAL_SEM_TRABALHADOR") != "1":
             trabalhador.start()
             publicador.start()
+            buscador.start()
         yield
         trabalhador.parar()
         publicador.parar()
+        buscador.parar()
 
     app = FastAPI(title="Canal Dark", docs_url=None, redoc_url=None, lifespan=ciclo_de_vida)
     app.mount("/estatico", StaticFiles(directory=PASTA / "estatico"), name="estatico")
@@ -103,6 +115,7 @@ def criar_app() -> FastAPI:
     api_templates.registrar(app, paginas, contexto)
     api_perfis.registrar(app, paginas, contexto)
     api_postagem.registrar(app, paginas, contexto)
+    api_busca.registrar(app, paginas, contexto)
 
     @app.get("/{tela}")
     def pagina_futura(request: Request, tela: str):

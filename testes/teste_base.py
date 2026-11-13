@@ -1925,5 +1925,176 @@ class TestePainelPostagem(unittest.TestCase):
         self.assertIn("aprovados", r.json()["erro"])
 
 
+class TesteBuscaDiaria(unittest.TestCase):
+    """Fase 6: ranking por velocidade, meta diaria, repetidos, horario da busca e limpeza do disco."""
+
+    @classmethod
+    def setUpClass(cls):
+        from app.busca import diaria
+        cls.d = diaria
+
+    def setUp(self):
+        import sqlite3
+        banco.criar_tabelas()
+        with sqlite3.connect(config.ARQUIVO_BANCO) as c:
+            for tabela in ("ranking", "buscas", "canais_monitorados", "fila", "configuracoes"):
+                c.execute(f"DELETE FROM {tabela}")
+        from datetime import datetime, timezone
+        self.agora = datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc)     # 09:00 em Brasilia
+
+    def cand(self, id_, horas, views, duracao=600, origem="busca", titulo="GTA 6 novo"):
+        from datetime import timedelta
+        publicado = (self.agora - timedelta(hours=horas)).isoformat()
+        return {"id_externo": id_, "titulo": titulo, "canal": "Canal", "views": views, "duracao_s": duracao,
+                "publicado": publicado, "origem": origem}
+
+    def test_ranking_ordena_por_velocidade_e_corta_a_janela(self):
+        lista = [self.cand("aaaaaaaaaa1", 6, 200_000),        # 33 mil/h
+                 self.cand("aaaaaaaaaa2", 700, 1_000_000),    # fora da janela
+                 self.cand("aaaaaaaaaa3", 30, 600_000),       # 20 mil/h
+                 self.cand("aaaaaaaaaa1", 6, 200_000)]        # repetido
+        ranking = self.d.montar_ranking(lista, 48, self.agora)
+        self.assertEqual([r["id_externo"] for r in ranking], ["aaaaaaaaaa1", "aaaaaaaaaa3"])
+        self.assertAlmostEqual(ranking[0]["velocidade"], 33333.3, delta=1)
+
+    def test_filtro_de_titulo_so_aceita_gta_6(self):
+        self.assertTrue(self.d.TITULO_GTA.search("GTA VI trailer"))
+        self.assertFalse(self.d.TITULO_GTA.search("GTA V mods"))
+
+    def test_rodar_enfileira_ate_a_meta_e_pula_repetidos_e_longos(self):
+        banco.salvar_config(1, "meta_cortes_dia", 8)          # media 4 cortes por video -> 2 videos
+        banco.registrar_video(1, "youtube", "bbbbbbbbbb1", "https://www.youtube.com/watch?v=bbbbbbbbbb1")
+        lista = [self.cand("bbbbbbbbbb1", 4, 900_000),                     # ja processado
+                 self.cand("bbbbbbbbbb2", 5, 800_000, duracao=9000),       # longo demais
+                 self.cand("bbbbbbbbbb3", 6, 700_000),
+                 self.cand("bbbbbbbbbb4", 7, 600_000),
+                 self.cand("bbbbbbbbbb5", 8, 500_000)]
+        r = self.d.rodar(1, coletor=lambda: lista, agora=self.agora)
+        self.assertEqual(r["enfileirados"], 2)
+        destinos = {x["id_externo"]: x["destino"] for x in self.d.ranking_da_busca(r["busca_id"])}
+        self.assertEqual(destinos["bbbbbbbbbb1"], "ja_processado")
+        self.assertEqual(destinos["bbbbbbbbbb2"], "ignorado")
+        self.assertEqual(destinos["bbbbbbbbbb3"], "enfileirado")
+        self.assertEqual(destinos["bbbbbbbbbb5"], "fora_da_meta")
+        self.assertEqual(len(banco.listar_fila(1)), 2)
+        # uma segunda busca no mesmo dia nao passa da meta
+        self.assertEqual(self.d.rodar(1, coletor=lambda: lista, agora=self.agora)["enfileirados"], 0)
+
+    def test_sem_enfileirar_so_mostra_o_ranking(self):
+        r = self.d.rodar(1, enfileirar=False, coletor=lambda: [self.cand("cccccccccc1", 3, 90_000)], agora=self.agora)
+        self.assertEqual(r["enfileirados"], 0)
+        self.assertEqual(banco.listar_fila(1), [])
+
+    def test_aceleracao_compara_com_a_busca_anterior(self):
+        from datetime import timedelta
+        self.d.rodar(1, enfileirar=False, coletor=lambda: [self.cand("dddddddddd1", 5, 100_000)], agora=self.agora)
+        depois = self.agora + timedelta(hours=10)
+        item = self.cand("dddddddddd1", 15, 600_000)
+        item["publicado"] = (self.agora - timedelta(hours=5)).isoformat()
+        r = self.d.rodar(1, enfileirar=False, coletor=lambda: [item], agora=depois)
+        linha = self.d.ranking_da_busca(r["busca_id"])[0]
+        self.assertAlmostEqual(linha["aceleracao"], 50_000, delta=1)
+
+    def test_busca_sem_resultado_registra_falha(self):
+        with self.assertRaises(RuntimeError):
+            self.d.rodar(1, coletor=lambda: [], agora=self.agora)
+        self.assertEqual(self.d.ultima_busca(1)["estado"], "falhou")
+
+    def test_horario_da_busca_automatica(self):
+        from datetime import datetime, timedelta, timezone
+        cedo = datetime(2026, 11, 13, 8, 0, tzinfo=timezone.utc)        # 05:00 em Brasilia
+        self.assertFalse(self.d.deve_rodar(1, self.agora))             # desligada por padrao
+        banco.salvar_config(1, "busca_ativa", 1)
+        self.assertFalse(self.d.deve_rodar(1, cedo))                   # antes das 6h
+        self.assertTrue(self.d.deve_rodar(1, self.agora))
+        self.assertTrue(self.d.rodar_se_for_hora(1, self.agora, coletor=lambda: [self.cand("eeeeeeeeee1", 3, 90_000)]))
+        self.assertFalse(self.d.deve_rodar(1, self.agora + timedelta(hours=2)))   # ja rodou hoje
+        self.assertTrue(self.d.deve_rodar(1, self.agora + timedelta(days=1)))     # amanha roda de novo
+
+    def test_falha_tenta_de_novo_depois_de_30_minutos_e_para_em_3(self):
+        from datetime import timedelta
+        banco.salvar_config(1, "busca_ativa", 1)
+        for n in range(3):
+            momento = self.agora + timedelta(minutes=40 * n)
+            self.assertTrue(self.d.deve_rodar(1, momento))
+            self.d.rodar_se_for_hora(1, momento, coletor=lambda: [])
+            self.assertFalse(self.d.deve_rodar(1, momento + timedelta(minutes=5)))
+        self.assertFalse(self.d.deve_rodar(1, self.agora + timedelta(hours=5)))
+
+    def test_limpeza_apaga_so_os_brutos_antigos(self):
+        import os as _os
+        from datetime import timedelta
+        config.garantir_pastas()
+        velho, novo = config.PASTA_BRUTOS / "velho_limpeza.mp4", config.PASTA_BRUTOS / "novo_limpeza.mp4"
+        for arquivo in (velho, novo):
+            arquivo.write_bytes(b"x")
+        antigo = (self.agora - timedelta(days=9)).timestamp()
+        _os.utime(velho, (antigo, antigo))
+        recente = (self.agora - timedelta(days=0.5)).timestamp()
+        _os.utime(novo, (recente, recente))
+        id_velho = banco.registrar_video(1, "youtube", "ffffffffff1", "https://www.youtube.com/watch?v=ffffffffff1")
+        id_novo = banco.registrar_video(1, "youtube", "ffffffffff2", "https://www.youtube.com/watch?v=ffffffffff2")
+        banco.atualizar_video(id_velho, caminho_arquivo=config.caminho_relativo(velho), estado="pronto")
+        banco.atualizar_video(id_novo, caminho_arquivo=config.caminho_relativo(novo), estado="pronto")
+        self.assertEqual(self.d.limpar_brutos(1, self.agora), 1)
+        self.assertFalse(velho.exists())
+        self.assertTrue(novo.exists())
+        self.assertIsNone(banco.ler_video(id_velho)["caminho_arquivo"])
+        self.assertIsNotNone(banco.ler_video(id_novo)["caminho_arquivo"])
+
+
+class TestePainelHoje(unittest.TestCase):
+    """Tela Hoje: pagina, ranking, gerar cortes de um video e canais."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        from fastapi.testclient import TestClient
+        from app.busca import diaria
+        from app.painel import servidor
+        cls.d = diaria
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        import sqlite3
+        banco.criar_tabelas()
+        with sqlite3.connect(config.ARQUIVO_BANCO) as c:
+            for tabela in ("ranking", "buscas", "canais_monitorados", "fila"):
+                c.execute(f"DELETE FROM {tabela}")
+
+    def test_pagina_e_ranking_vazio(self):
+        self.assertEqual(self.cliente.get("/hoje").status_code, 200)
+        dados = self.cliente.get("/api/hoje").json()
+        self.assertEqual(dados["ranking"], [])
+        self.assertFalse(dados["ativa"])
+
+    def test_ranking_e_gerar_cortes(self):
+        from datetime import datetime, timedelta, timezone
+        agora = datetime.now(timezone.utc)
+        item = {"id_externo": "gggggggggg1", "titulo": "GTA 6 vídeo", "canal": "C", "views": 50_000, "duracao_s": 300,
+                "publicado": (agora - timedelta(hours=4)).isoformat(), "origem": "busca"}
+        self.d.rodar(1, enfileirar=False, coletor=lambda: [item])
+        dados = self.cliente.get("/api/hoje").json()
+        self.assertEqual(dados["ranking"][0]["destino"], "fora_da_meta")
+        self.assertEqual(self.cliente.post("/api/hoje/processar", json={"id": "gggggggggg1"}).status_code, 200)
+        self.assertEqual(self.cliente.post("/api/hoje/processar", json={"id": "gggggggggg1"}).status_code, 409)
+        self.assertEqual(self.cliente.post("/api/hoje/processar", json={"id": "naoexiste01"}).status_code, 404)
+        self.assertEqual(len(banco.listar_fila(1)), 1)
+
+    def test_canais_acompanhados(self):
+        falso = {"canal": {"nome": "Canal Teste"}, "posts": []}
+        with mock.patch("app.busca.perfil.listar", return_value=falso):
+            r = self.cliente.post("/api/canais", json={"url": "@canalteste"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.cliente.get("/api/hoje").json()["canais"][0]["nome"], "Canal Teste")
+        self.assertEqual(self.cliente.delete(f"/api/canais/{r.json()['canal']['id']}").status_code, 200)
+        self.assertEqual(self.cliente.get("/api/hoje").json()["canais"], [])
+        self.assertEqual(self.cliente.post("/api/canais", json={"url": "https://instagram.com/x"}).status_code, 400)
+
+    def test_configuracoes_da_busca_aparecem(self):
+        chaves = {v["chave"] for v in self.cliente.get("/api/configuracoes").json()["valores"]}
+        self.assertTrue({"busca_ativa", "busca_hora", "meta_cortes_dia", "apagar_brutos_dias"} <= chaves)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -538,3 +538,32 @@ code.codigo { display: block; padding: 8px 10px; border-radius: 9px; background:
 .post-titulo { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .post-acoes { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 700px) { .post { flex-wrap: wrap; } .post-acoes { width: 100%; justify-content: flex-start; } }
+
+/* ---------- Hoje (Fase 6) ---------- */
+.rank-cab { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.rank-cab h3 { margin: 0; }
+.rank { display: grid; grid-template-columns: 32px 96px minmax(0, 1fr) 84px 84px auto; gap: 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--linha); }
+.rank-pos { font-weight: 700; color: var(--suave); text-align: center; }
+.rank-mini { width: 96px; height: 54px; object-fit: cover; border-radius: 8px; background: var(--cartao-2); }
+.rank-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rank-info small, .rank-num small { color: var(--suave); }
+.rank-titulo { font-weight: 600; color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-titulo:hover { text-decoration: underline; }
+.rank-num { display: flex; flex-direction: column; text-align: right; }
+.rank-num strong { font-size: 1.05rem; }
+.aviso-busca { margin-top: 16px; padding: 12px 16px; }
+.aviso-busca.erro { color: var(--erro); }
+.linha-form { display: flex; gap: 10px; flex-wrap: wrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px; border: 1px solid var(--linha); border-radius: 999px; }
+.chip a { color: inherit; text-decoration: none; }
+.chip button { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 50%; background: transparent; color: var(--suave); cursor: pointer; }
+.chip button:hover { background: var(--erro); color: #fff; }
+.chip button .i { width: 12px; height: 12px; }
+.hist { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--linha); }
+.hist:first-child { border-top: 0; }
+@media (max-width: 760px) {
+  .rank { grid-template-columns: 28px minmax(0, 1fr) auto; }
+  .rank-mini, .rank-num:nth-of-type(2) { display: none; }
+  .rank-acao { grid-column: 2 / -1; }
+}
