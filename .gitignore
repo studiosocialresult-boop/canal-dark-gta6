@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+dados/*
+!dados/brutos/
+dados/brutos/*
+!dados/brutos/.gitkeep
+!dados/cortes/
+dados/cortes/*
+!dados/cortes/.gitkeep
+cookies.txt

@@ -1,0 +1,9 @@
+yt-dlp
+yt-dlp-ejs
+faster-whisper
+anthropic
+python-dotenv
+fastapi
+uvicorn
+apscheduler
+requests

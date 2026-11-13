@@ -1,0 +1,94 @@
+"""Configuracoes centrais do projeto: pastas, modelos de IA, valores padrao e log.
+
+Rodar sozinho mostra onde cada pasta esta:
+    python -m app.config
+"""
+import logging
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+RAIZ = Path(__file__).resolve().parent.parent
+load_dotenv(RAIZ / ".env")
+
+# A pasta de dados pode ser trocada pela variavel CANAL_PASTA_DADOS (usada nos testes e na VPS).
+PASTA_DADOS = Path(os.getenv("CANAL_PASTA_DADOS") or RAIZ / "dados")
+PASTA_BRUTOS = PASTA_DADOS / "brutos"
+PASTA_CORTES = PASTA_DADOS / "cortes"
+PASTA_TRANSCRICOES = PASTA_DADOS / "transcricoes"
+PASTA_LOGS = PASTA_DADOS / "logs"
+ARQUIVO_BANCO = PASTA_DADOS / "canal.db"
+PASTA_PROMPTS = RAIZ / "prompts"
+# Login do YouTube (conta secundaria) para baixar videos com restricao de idade.
+# Opcional: se o arquivo nao existir, o download funciona sem login.
+ARQUIVO_COOKIES = Path(os.getenv("CANAL_COOKIES", RAIZ / "cookies.txt"))
+
+# Enquanto nao existe login, tudo pertence a este usuario.
+USUARIO_PADRAO = 1
+
+# Modelos da API da Anthropic (definidos no CLAUDE.md do projeto).
+MODELO_CEREBRO = "claude-sonnet-5-5"   # escolha dos cortes e roteiro
+MODELO_RAPIDO = "claude-haiku-5-5"     # titulos, legendas e hashtags
+ESFORCO_CEREBRO = "medium"
+ESFORCO_RAPIDO = "low"
+
+# Preco em dolares por 1 milhao de tokens (entrada, saida). Serve so para estimar custo.
+PRECOS_USD_POR_MILHAO = {
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-haiku-5-5": (0.10, 0.50),
+}
+
+# Valores padrao das configuracoes por usuario. O banco guarda so o que o usuario mudou.
+CONFIG_PADRAO = {
+    "cortes_min": 3,
+    "cortes_max": 5,
+    "duracao_min_s": 20,
+    "duracao_max_s": 75,
+    "nota_minima_narracao": 70,
+}
+
+
+def garantir_pastas() -> None:
+    """Cria as pastas de dados que ainda nao existem."""
+    for pasta in (PASTA_BRUTOS, PASTA_CORTES, PASTA_TRANSCRICOES, PASTA_LOGS):
+        pasta.mkdir(parents=True, exist_ok=True)
+
+
+def caminho_relativo(caminho: Path) -> str:
+    """Converte um caminho dentro de dados/ para o texto guardado no banco.
+
+    O banco guarda caminhos relativos e com barra normal, para o mesmo banco
+    funcionar no Windows e no Linux.
+    """
+    return Path(caminho).resolve().relative_to(PASTA_DADOS.resolve()).as_posix()
+
+
+def caminho_absoluto(texto: str) -> Path:
+    """Converte o texto guardado no banco de volta para um caminho real."""
+    return PASTA_DADOS / Path(texto)
+
+
+def criar_log(nome: str) -> logging.Logger:
+    """Devolve um log que escreve na tela e em dados/logs/canal.log."""
+    raiz = logging.getLogger("canal")
+    if not raiz.handlers:
+        PASTA_LOGS.mkdir(parents=True, exist_ok=True)
+        formato = logging.Formatter("%(asctime)s [%(name)s] %(message)s", "%d/%m %H:%M:%S")
+        tela = logging.StreamHandler()
+        tela.setFormatter(formato)
+        arquivo = logging.FileHandler(PASTA_LOGS / "canal.log", encoding="utf-8")
+        arquivo.setFormatter(formato)
+        raiz.addHandler(tela)
+        raiz.addHandler(arquivo)
+        raiz.setLevel(logging.INFO)
+    return raiz.getChild(nome) if nome != "canal" else raiz
+
+
+if __name__ == "__main__":
+    garantir_pastas()
+    print("Raiz do projeto:", RAIZ)
+    print("Pasta de dados: ", PASTA_DADOS)
+    print("Banco:          ", ARQUIVO_BANCO)
+    print("Prompts:        ", PASTA_PROMPTS)
+    print("Chave Anthropic:", "configurada" if os.getenv("ANTHROPIC_API_KEY") else "FALTANDO no .env")

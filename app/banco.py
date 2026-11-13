@@ -1,0 +1,241 @@
+"""Banco de dados (SQLite em dados/canal.db).
+
+Guarda os videos de origem, os cortes e o gasto com IA. Toda tabela tem
+usuario_id, para a ferramenta poder ter varios usuarios no futuro.
+
+Rodar sozinho cria o banco e lista as tabelas:
+    python -m app.banco
+"""
+import sqlite3
+from contextlib import closing
+
+from app import config
+from app.contratos import CorteProposto
+
+ESQUEMA = """
+CREATE TABLE IF NOT EXISTS usuarios (
+    id INTEGER PRIMARY KEY,
+    nome TEXT NOT NULL,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS configuracoes (
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    chave TEXT NOT NULL,
+    valor TEXT NOT NULL,
+    PRIMARY KEY (usuario_id, chave)
+);
+
+-- Videos de origem. A fonte (url, canal, titulo) fica guardada para dar credito.
+-- estado: novo -> baixado -> transcrito -> analisado -> pronto (ou falhou)
+CREATE TABLE IF NOT EXISTS videos (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    plataforma TEXT NOT NULL,
+    id_externo TEXT NOT NULL,
+    url TEXT NOT NULL,
+    titulo TEXT,
+    canal TEXT,
+    duracao_s REAL,
+    idioma TEXT,
+    caminho_arquivo TEXT,
+    caminho_transcricao TEXT,
+    estado TEXT NOT NULL DEFAULT 'novo',
+    erro TEXT,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    atualizado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (usuario_id, plataforma, id_externo)
+);
+
+-- Cortes escolhidos pelo cerebro.
+-- estado: proposto -> renderizado -> aprovado / descartado (ou falhou)
+CREATE TABLE IF NOT EXISTS cortes (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    video_id INTEGER NOT NULL REFERENCES videos(id),
+    frase_inicio INTEGER NOT NULL,
+    frase_fim INTEGER NOT NULL,
+    inicio_s REAL NOT NULL,
+    fim_s REAL NOT NULL,
+    nota INTEGER NOT NULL,
+    motivo TEXT NOT NULL,
+    titulo TEXT NOT NULL,
+    modo TEXT NOT NULL CHECK (modo IN ('original', 'narrado')),
+    estado TEXT NOT NULL DEFAULT 'proposto',
+    caminho_arquivo TEXT,
+    erro TEXT,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Cada chamada paga a um servico de IA, para medir o custo por corte.
+CREATE TABLE IF NOT EXISTS uso_api (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    video_id INTEGER REFERENCES videos(id),
+    servico TEXT NOT NULL,
+    modelo TEXT,
+    etapa TEXT NOT NULL,
+    tokens_entrada INTEGER NOT NULL DEFAULT 0,
+    tokens_saida INTEGER NOT NULL DEFAULT 0,
+    caracteres INTEGER NOT NULL DEFAULT 0,
+    custo_usd REAL NOT NULL DEFAULT 0,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+CAMPOS_VIDEO = {
+    "titulo", "canal", "duracao_s", "idioma", "caminho_arquivo",
+    "caminho_transcricao", "estado", "erro",
+}
+CAMPOS_CORTE = {"estado", "caminho_arquivo", "erro"}
+
+
+def conectar() -> sqlite3.Connection:
+    config.PASTA_DADOS.mkdir(parents=True, exist_ok=True)
+    conexao = sqlite3.connect(config.ARQUIVO_BANCO)
+    conexao.row_factory = sqlite3.Row
+    conexao.execute("PRAGMA foreign_keys = ON")
+    return conexao
+
+
+def criar_tabelas() -> None:
+    """Cria as tabelas que faltam e o usuario padrao. Pode rodar quantas vezes quiser."""
+    with closing(conectar()) as conexao, conexao:
+        conexao.executescript(ESQUEMA)
+        conexao.execute(
+            "INSERT OR IGNORE INTO usuarios (id, nome) VALUES (?, ?)",
+            (config.USUARIO_PADRAO, "dono"),
+        )
+
+
+# ---------- configuracoes por usuario ----------
+
+def ler_config(usuario_id: int, chave: str):
+    """Le uma configuracao do usuario; se ele nunca mudou, devolve o valor padrao."""
+    padrao = config.CONFIG_PADRAO[chave]
+    with closing(conectar()) as conexao:
+        linha = conexao.execute(
+            "SELECT valor FROM configuracoes WHERE usuario_id = ? AND chave = ?",
+            (usuario_id, chave),
+        ).fetchone()
+    if linha is None:
+        return padrao
+    return type(padrao)(linha["valor"])
+
+
+def salvar_config(usuario_id: int, chave: str, valor) -> None:
+    if chave not in config.CONFIG_PADRAO:
+        raise KeyError(f"Configuracao desconhecida: {chave}")
+    with closing(conectar()) as conexao, conexao:
+        conexao.execute(
+            "INSERT INTO configuracoes (usuario_id, chave, valor) VALUES (?, ?, ?) "
+            "ON CONFLICT (usuario_id, chave) DO UPDATE SET valor = excluded.valor",
+            (usuario_id, chave, str(valor)),
+        )
+
+
+# ---------- videos ----------
+
+def buscar_video(usuario_id: int, plataforma: str, id_externo: str):
+    with closing(conectar()) as conexao:
+        return conexao.execute(
+            "SELECT * FROM videos WHERE usuario_id = ? AND plataforma = ? AND id_externo = ?",
+            (usuario_id, plataforma, id_externo),
+        ).fetchone()
+
+
+def ler_video(video_id: int):
+    with closing(conectar()) as conexao:
+        return conexao.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+
+
+def registrar_video(usuario_id: int, plataforma: str, id_externo: str, url: str) -> int:
+    """Registra o video e devolve o id. Se ja existir, devolve o id existente."""
+    with closing(conectar()) as conexao, conexao:
+        conexao.execute(
+            "INSERT OR IGNORE INTO videos (usuario_id, plataforma, id_externo, url) VALUES (?, ?, ?, ?)",
+            (usuario_id, plataforma, id_externo, url),
+        )
+        linha = conexao.execute(
+            "SELECT id FROM videos WHERE usuario_id = ? AND plataforma = ? AND id_externo = ?",
+            (usuario_id, plataforma, id_externo),
+        ).fetchone()
+    return linha["id"]
+
+
+def atualizar_video(video_id: int, **campos) -> None:
+    _atualizar("videos", CAMPOS_VIDEO, video_id, campos, marcar_data=True)
+
+
+# ---------- cortes ----------
+
+def registrar_corte(usuario_id: int, video_id: int, corte: CorteProposto) -> int:
+    with closing(conectar()) as conexao, conexao:
+        cursor = conexao.execute(
+            "INSERT INTO cortes (usuario_id, video_id, frase_inicio, frase_fim, inicio_s, fim_s, "
+            "nota, motivo, titulo, modo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (usuario_id, video_id, corte.frase_inicio, corte.frase_fim, corte.inicio, corte.fim,
+             corte.nota, corte.motivo, corte.titulo, corte.modo),
+        )
+        return cursor.lastrowid
+
+
+def cortes_do_video(video_id: int) -> list:
+    with closing(conectar()) as conexao:
+        return conexao.execute(
+            "SELECT * FROM cortes WHERE video_id = ? ORDER BY nota DESC, id", (video_id,)
+        ).fetchall()
+
+
+def atualizar_corte(corte_id: int, **campos) -> None:
+    _atualizar("cortes", CAMPOS_CORTE, corte_id, campos)
+
+
+# ---------- gasto com IA ----------
+
+def registrar_uso_api(usuario_id: int, servico: str, etapa: str, *, video_id: int | None = None,
+                      modelo: str | None = None, tokens_entrada: int = 0, tokens_saida: int = 0,
+                      caracteres: int = 0, custo_usd: float = 0.0) -> None:
+    with closing(conectar()) as conexao, conexao:
+        conexao.execute(
+            "INSERT INTO uso_api (usuario_id, video_id, servico, modelo, etapa, tokens_entrada, "
+            "tokens_saida, caracteres, custo_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (usuario_id, video_id, servico, modelo, etapa, tokens_entrada, tokens_saida,
+             caracteres, custo_usd),
+        )
+
+
+def custo_do_video(video_id: int) -> float:
+    """Soma, em dolares, o que ja foi gasto com IA neste video."""
+    with closing(conectar()) as conexao:
+        linha = conexao.execute(
+            "SELECT COALESCE(SUM(custo_usd), 0) AS total FROM uso_api WHERE video_id = ?",
+            (video_id,),
+        ).fetchone()
+    return linha["total"]
+
+
+def _atualizar(tabela: str, permitidos: set, registro_id: int, campos: dict,
+               marcar_data: bool = False) -> None:
+    desconhecidos = set(campos) - permitidos
+    if desconhecidos:
+        raise KeyError(f"Campos nao permitidos em {tabela}: {sorted(desconhecidos)}")
+    if not campos:
+        return
+    partes = [f"{nome} = ?" for nome in campos]
+    if marcar_data:
+        partes.append("atualizado_em = datetime('now')")
+    with closing(conectar()) as conexao, conexao:
+        conexao.execute(
+            f"UPDATE {tabela} SET {', '.join(partes)} WHERE id = ?",
+            (*campos.values(), registro_id),
+        )
+
+
+if __name__ == "__main__":
+    criar_tabelas()
+    with closing(conectar()) as _conexao:
+        _tabelas = [l["name"] for l in _conexao.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")]
+    print("Banco em:", config.ARQUIVO_BANCO)
+    print("Tabelas: ", ", ".join(_tabelas))
