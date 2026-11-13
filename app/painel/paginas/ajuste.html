@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block titulo %}Editor{% endblock %}
+
+{% block conteudo %}
+<section class="cartao topo-assistente">
+  <a class="botao-icone" href="/editor" aria-label="Voltar para o Editor" title="Voltar"><svg class="i"><use href="#i-esq"/></svg></a>
+  <input class="nome-template" id="nome" maxlength="80" aria-label="Nome do ajuste" spellcheck="false">
+  <span style="flex:1"></span>
+  <button class="botao primario" id="gerar"><svg class="i"><use href="#i-play"/></svg>Gerar vídeo</button>
+</section>
+
+<div class="editor">
+  <div style="display:grid;gap:16px;min-width:0">
+    <section class="cartao painel-passo">
+      <h2>1. Escolha o vídeo</h2>
+      <div class="segmentado" id="fontes" style="justify-self:start">
+        <button data-fonte="cortes" class="ativo">Meus cortes</button><button data-fonte="biblioteca">Biblioteca</button><button data-fonte="enviar">Enviar do computador</button>
+      </div>
+      <div id="painel-fonte"></div>
+      <div id="video-atual"></div>
+    </section>
+    <section class="cartao painel-passo" id="enquadramento"></section>
+    <section class="cartao painel-passo" id="resultado" hidden></section>
+  </div>
+  <aside class="coluna-previa">
+    <div class="celular carregando" id="celular"><img id="previa" alt="Prévia do vídeo"></div>
+    <span class="dica">Prévia do enquadramento</span>
+  </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>window.TEMPLATE_ID = {{ template_id }};</script>
+<script src="/estatico/ajuste.js"></script>
+{% endblock %}

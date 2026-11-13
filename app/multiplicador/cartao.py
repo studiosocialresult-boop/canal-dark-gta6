@@ -185,7 +185,10 @@ def compor(layout: str, config_salva: dict | None, frase: str, avatar: Path | No
     zonas: dict[str, Retangulo] = {}
     alinh = modelos.alinhamento(layout, config)
 
-    if layout == "post":
+    if layout == "cheio":
+        zonas["video"] = (0, 0, LARGURA, ALTURA)
+
+    elif layout == "post":
         y = 150
         if mostrar_perfil and posicao == "topo":
             y += _perfil(imagem, pintor, config, cores, y, avatar, alinh) + 36

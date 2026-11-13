@@ -12,15 +12,29 @@ from contextlib import closing
 from app import config
 from app.contratos import CorteProposto, Roteiro
 
+TEMPLATES_SQL = """
+CREATE TABLE IF NOT EXISTS templates (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    nome TEXT NOT NULL,
+    layout TEXT NOT NULL,
+    config TEXT NOT NULL DEFAULT '{}',
+    passo INTEGER NOT NULL DEFAULT 1,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 FILA_SQL = """
 -- Fila de trabalho do painel: um item por vez e processado, na ordem de chegada.
--- tipo: "link" (processar um video), "narrar" (narrar um corte; alvo = id do corte) ou
--- "lote" (gerar os videos de um template; alvo = id do template).
+-- tipo: "link" (processar um video), "narrar" (narrar um corte; alvo = id do corte),
+-- "lote" (gerar os videos de um template; alvo = id do template) ou "baixar" (baixar um video
+-- para a biblioteca; alvo = link). O codigo valida o tipo.
 -- estado: aguardando -> processando -> pronto (ou falhou)
 CREATE TABLE IF NOT EXISTS fila (
     id INTEGER PRIMARY KEY,
     usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
-    tipo TEXT NOT NULL CHECK (tipo IN ('link', 'narrar', 'lote')),
+    tipo TEXT NOT NULL,
     alvo TEXT NOT NULL,
     rotulo TEXT NOT NULL,
     estado TEXT NOT NULL DEFAULT 'aguardando',
@@ -102,13 +116,14 @@ CREATE TABLE IF NOT EXISTS narracoes (
 );
 
 -- Fila de trabalho do painel: um item por vez e processado, na ordem de chegada.
--- tipo: "link" (processar um video), "narrar" (narrar um corte; alvo = id do corte) ou
--- "lote" (gerar os videos de um template; alvo = id do template).
+-- tipo: "link" (processar um video), "narrar" (narrar um corte; alvo = id do corte),
+-- "lote" (gerar os videos de um template; alvo = id do template) ou "baixar" (baixar um video
+-- para a biblioteca; alvo = link). O codigo valida o tipo.
 -- estado: aguardando -> processando -> pronto (ou falhou)
 CREATE TABLE IF NOT EXISTS fila (
     id INTEGER PRIMARY KEY,
     usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
-    tipo TEXT NOT NULL CHECK (tipo IN ('link', 'narrar', 'lote')),
+    tipo TEXT NOT NULL,
     alvo TEXT NOT NULL,
     rotulo TEXT NOT NULL,
     estado TEXT NOT NULL DEFAULT 'aguardando',
@@ -134,7 +149,7 @@ CREATE TABLE IF NOT EXISTS templates (
     id INTEGER PRIMARY KEY,
     usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
     nome TEXT NOT NULL,
-    layout TEXT NOT NULL CHECK (layout IN ('post', 'meme', 'viral')),
+    layout TEXT NOT NULL,
     config TEXT NOT NULL DEFAULT '{}',
     passo INTEGER NOT NULL DEFAULT 1,
     criado_em TEXT NOT NULL DEFAULT (datetime('now')),
@@ -166,6 +181,21 @@ CREATE TABLE IF NOT EXISTS template_frases (
     origem TEXT NOT NULL DEFAULT 'manual',
     selecionada INTEGER NOT NULL DEFAULT 1,
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Videos baixados pelas telas Perfis (ficam para usar nos templates e no editor).
+CREATE TABLE IF NOT EXISTS biblioteca (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    plataforma TEXT NOT NULL,
+    id_externo TEXT NOT NULL,
+    url TEXT NOT NULL,
+    titulo TEXT,
+    canal TEXT,
+    duracao_s REAL,
+    arquivo TEXT NOT NULL,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (usuario_id, plataforma, id_externo)
 );
 
 -- Um video gerado = uma midia x uma frase. estado: aguardando -> renderizando -> pronto (ou falhou).
@@ -216,24 +246,55 @@ def conectar() -> sqlite3.Connection:
 
 def criar_tabelas() -> None:
     """Cria as tabelas que faltam e o usuario padrao. Pode rodar quantas vezes quiser."""
+    _migrar_tabelas_com_trava()
     with closing(conectar()) as conexao, conexao:
         conexao.executescript(ESQUEMA)
-        _migrar_fila(conexao)
         conexao.execute(
             "INSERT OR IGNORE INTO usuarios (id, nome) VALUES (?, ?)",
             (config.USUARIO_PADRAO, "dono"),
         )
 
 
-def _migrar_fila(conexao: sqlite3.Connection) -> None:
-    """Bancos criados antes do tipo "lote" tem a fila com a regra antiga: refaz a tabela."""
-    linha = conexao.execute("SELECT sql FROM sqlite_master WHERE name = 'fila'").fetchone()
-    if linha is None or "'lote'" in linha["sql"]:
+TRAVAS_ANTIGAS = {"fila": "CHECK (tipo", "templates": "CHECK (layout"}
+
+
+def _sem_comentarios(sql: str) -> str:
+    return "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
+
+
+def _migrar_tabelas_com_trava() -> None:
+    """Bancos antigos tem `fila` e `templates` com listas fixas de tipos e layouts (CHECK). Refaz as
+    duas tabelas sem a trava, copiando tudo numa unica transacao. Roda uma vez e nao perde dados."""
+    if not config.ARQUIVO_BANCO.exists():
         return
-    conexao.execute("ALTER TABLE fila RENAME TO fila_antiga")
-    conexao.executescript(FILA_SQL)
-    conexao.execute("INSERT INTO fila SELECT * FROM fila_antiga")
-    conexao.execute("DROP TABLE fila_antiga")
+    conexao = sqlite3.connect(config.ARQUIVO_BANCO, isolation_level=None)
+    conexao.row_factory = sqlite3.Row
+    try:
+        refazer = []
+        for nome, trava in TRAVAS_ANTIGAS.items():
+            linha = conexao.execute("SELECT sql FROM sqlite_master WHERE name = ?", (nome,)).fetchone()
+            if linha is not None and trava in linha["sql"]:
+                refazer.append(nome)
+        if not refazer:
+            return
+        conexao.execute("PRAGMA foreign_keys = OFF")
+        # Sem isto, renomear a tabela antiga faria as tabelas filhas passarem a apontar para o nome novo dela.
+        conexao.execute("PRAGMA legacy_alter_table = ON")
+        conexao.execute("BEGIN")
+        try:
+            for nome in refazer:
+                conexao.execute(f"ALTER TABLE {nome} RENAME TO {nome}_antiga")
+                conexao.execute(_sem_comentarios(FILA_SQL if nome == "fila" else TEMPLATES_SQL))
+                conexao.execute(f"INSERT INTO {nome} SELECT * FROM {nome}_antiga")
+                conexao.execute(f"DROP TABLE {nome}_antiga")
+            conexao.execute("COMMIT")
+        except Exception:
+            conexao.execute("ROLLBACK")
+            raise
+    finally:
+        conexao.execute("PRAGMA legacy_alter_table = OFF")
+        conexao.execute("PRAGMA foreign_keys = ON")
+        conexao.close()
 
 
 # ---------- configuracoes por usuario ----------

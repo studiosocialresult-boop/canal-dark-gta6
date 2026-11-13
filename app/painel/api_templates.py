@@ -1,10 +1,13 @@
 """Rotas do painel para Templates: paginas, assistente (dados, midias, frases, previa) e geracao."""
 import re
 import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from app import banco, config, ia
 from app.multiplicador import frases as modulo_frases
@@ -107,6 +110,21 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         return paginas.TemplateResponse(request, "assistente.html", contexto(
             request, "templates", template_id=template["id"], passos=PASSOS))
 
+    @app.get("/editor")
+    def pagina_editor(request: Request):
+        return paginas.TemplateResponse(request, "editor.html", contexto(request, "editor"))
+
+    @app.get("/editor/{template_id}")
+    def pagina_ajuste(request: Request, template_id: int):
+        template = _template_do_dono(template_id)
+        if template["layout"] != "cheio":
+            raise HTTPException(404, "Esse ajuste não existe.")
+        return paginas.TemplateResponse(request, "ajuste.html", contexto(request, "editor", template_id=template["id"]))
+
+    @app.get("/api/editor")
+    def api_editor():
+        return {"ajustes": [_json_template(t) for t in repositorio.listar_templates(USUARIO, editor=True)]}
+
     # ---------- templates ----------
 
     @app.get("/api/templates")
@@ -114,7 +132,7 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         ativos = {i["alvo"] for i in banco.listar_fila(USUARIO, 100)
                   if i["tipo"] == "lote" and i["estado"] in ("aguardando", "processando")}
         return {"templates": [_json_template(t, str(t["id"]) in ativos) for t in repositorio.listar_templates(USUARIO)],
-                "layouts": [{"id": k, **{c: v[c] for c in ("nome", "descricao")}} for k, v in modelos.LAYOUTS.items()]}
+                "layouts": [{"id": k, **{c: v[c] for c in ("nome", "descricao")}} for k, v in modelos.layouts_visiveis().items()]}
 
     @app.post("/api/templates")
     def api_criar(dados: dict = Body(...)):
@@ -133,7 +151,7 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         t = _template_do_dono(template_id)
         return {
             "id": t["id"], "nome": t["nome"], "layout": t["layout"], "passo": t["passo"],
-            "layouts": {k: v["nome"] for k, v in modelos.LAYOUTS.items()},
+            "layouts": {k: v["nome"] for k, v in modelos.layouts_visiveis().items()},
             "config": modelos.config_completa(t["config"]),
             "avatar_url": _url_do_avatar(t),
             "padroes_do_layout": {"alinhamento": modelos.LAYOUTS[t["layout"]]["alinhamento_padrao"],
@@ -235,11 +253,18 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         _template_do_dono(template_id)
         zona = 2 if dados.get("zona") == 2 else 1
         ids = [int(i) for i in dados.get("cortes", [])]
+        biblioteca = [int(i) for i in dados.get("biblioteca", [])]
         for corte_id in ids:
             corte = banco.ler_corte(corte_id)
             if corte is None or corte["usuario_id"] != USUARIO:
                 raise HTTPException(404, "Corte não encontrado.")
-        return {"ok": True, "novos": repositorio.adicionar_cortes(template_id, ids, zona)}
+        for item_id in biblioteca:
+            item = repositorio.ler_biblioteca(item_id)
+            if item is None or item["usuario_id"] != USUARIO:
+                raise HTTPException(404, "Vídeo não encontrado na biblioteca.")
+        novos = repositorio.adicionar_cortes(template_id, ids, zona) if ids else 0
+        novos += repositorio.adicionar_da_biblioteca(template_id, biblioteca, zona) if biblioteca else 0
+        return {"ok": True, "novos": novos}
 
     @app.post("/api/templates/{template_id}/upload")
     async def api_upload(request: Request, template_id: int, nome: str = "video.mp4", zona: int = 1):
@@ -372,7 +397,8 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         novas, _ja = repositorio.gerar_saidas(template_id)
         if novas == 0 and repositorio.contagem_saidas(template_id)["aguardando"] == 0:
             raise HTTPException(409, "Todos esses vídeos já foram gerados.")
-        banco.enfileirar(USUARIO, "lote", str(template_id), f"Template: {t['nome']}")
+        banco.enfileirar(USUARIO, "lote", str(template_id),
+                         f"Editor: {t['nome']}" if t["layout"] == "cheio" else f"Template: {t['nome']}")
         return {"ok": True, "novas": novas}
 
     @app.get("/api/templates/{template_id}/saidas")
@@ -398,6 +424,31 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         nome = f"{_nome_seguro(repositorio.ler_template(template_id)['nome'], 'template')}_{saida_id}.mp4"
         return FileResponse(arquivo, media_type="video/mp4", filename=nome if baixar else None,
                             headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/templates/{template_id}/saidas.zip")
+    def api_zip(template_id: int):
+        template = _template_do_dono(template_id)
+        prontas = [s for s in repositorio.listar_saidas(template_id) if s["estado"] == "pronto" and s["arquivo"]]
+        pasta = repositorio.pasta_do_template(template_id).resolve()
+        prontas = [s for s in prontas if (config.caminho_absoluto(s["arquivo"]).resolve().is_relative_to(pasta)
+                                          and config.caminho_absoluto(s["arquivo"]).exists())]
+        if not prontas:
+            raise HTTPException(404, "Ainda não há vídeos prontos para baixar.")
+        temporario = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+        temporario.close()
+        nome = _nome_seguro(template["nome"], "template")
+        with zipfile.ZipFile(temporario.name, "w", zipfile.ZIP_STORED) as arquivo:     # mp4 ja e comprimido
+            for numero, s in enumerate(prontas, start=1):
+                arquivo.write(config.caminho_absoluto(s["arquivo"]), f"{nome}_{numero:02d}.mp4")
+        return FileResponse(temporario.name, media_type="application/zip", filename=f"{nome}.zip",
+                            background=BackgroundTask(lambda: Path(temporario.name).unlink(missing_ok=True)))
+
+    @app.delete("/api/templates/{template_id}/saidas")
+    def api_limpar_saidas(template_id: int):
+        _template_do_dono(template_id)
+        if banco.item_na_fila(USUARIO, "lote", str(template_id)):
+            raise HTTPException(409, "Este template está gerando vídeos agora. Espere terminar.")
+        return {"ok": True, "apagados": repositorio.apagar_saidas(template_id)}
 
     # ---------- perfis de pagina salvos ----------
 

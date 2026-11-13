@@ -1077,5 +1077,259 @@ class TesteTemplates(unittest.TestCase):
         self.addCleanup(lambda: __import__("sqlite3").connect(config.ARQUIVO_BANCO).execute("DELETE FROM fila").connection.commit())
 
 
+class TesteMigracaoDoBanco(unittest.TestCase):
+    """O banco de quem ja usa o painel e refeito sem perder dados nem quebrar as ligacoes entre tabelas."""
+
+    ANTIGO = """
+    CREATE TABLE usuarios (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, criado_em TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE fila (id INTEGER PRIMARY KEY, usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+        tipo TEXT NOT NULL CHECK (tipo IN ('link', 'narrar', 'lote')), alvo TEXT NOT NULL, rotulo TEXT NOT NULL,
+        estado TEXT NOT NULL DEFAULT 'aguardando', progresso TEXT, resultado TEXT,
+        criado_em TEXT NOT NULL DEFAULT (datetime('now')), iniciado_em TEXT, terminado_em TEXT);
+    CREATE TABLE templates (id INTEGER PRIMARY KEY, usuario_id INTEGER NOT NULL REFERENCES usuarios(id), nome TEXT NOT NULL,
+        layout TEXT NOT NULL CHECK (layout IN ('post', 'meme', 'viral')), config TEXT NOT NULL DEFAULT '{}',
+        passo INTEGER NOT NULL DEFAULT 1, criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+        atualizado_em TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE template_frases (id INTEGER PRIMARY KEY, template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+        texto TEXT NOT NULL, origem TEXT NOT NULL DEFAULT 'manual', selecionada INTEGER NOT NULL DEFAULT 1,
+        criado_em TEXT NOT NULL DEFAULT (datetime('now')));
+    INSERT INTO usuarios (id, nome) VALUES (1, 'dono');
+    INSERT INTO fila (usuario_id, tipo, alvo, rotulo) VALUES (1, 'link', 'https://x', 'x');
+    INSERT INTO templates (usuario_id, nome, layout) VALUES (1, 'Meu template', 'post');
+    INSERT INTO template_frases (template_id, texto) VALUES (1, 'Frase guardada');
+    """
+
+    def test_refaz_as_tabelas_sem_perder_nada(self):
+        import sqlite3
+        pasta = Path(tempfile.mkdtemp(prefix="migra_"))
+        arquivo = pasta / "canal.db"
+        with sqlite3.connect(arquivo) as conexao:
+            conexao.executescript(self.ANTIGO)
+        with mock.patch.object(config, "ARQUIVO_BANCO", arquivo):
+            banco.criar_tabelas()
+            banco.criar_tabelas()                                   # rodar de novo nao muda nada
+            from contextlib import closing
+            with closing(banco.conectar()) as c:
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM fila").fetchone()[0], 1)
+                self.assertEqual(c.execute("SELECT nome, layout FROM templates").fetchone()[:], ("Meu template", "post"))
+                self.assertEqual(c.execute("SELECT texto FROM template_frases").fetchone()[0], "Frase guardada")
+                # as tabelas filhas continuam apontando para `templates` (nao para a tabela antiga)
+                self.assertEqual([r["table"] for r in c.execute("PRAGMA foreign_key_list(template_frases)")], ["templates"])
+                self.assertEqual(c.execute("PRAGMA foreign_key_check").fetchall(), [])
+                # o que a trava antiga proibia agora entra
+                c.execute("INSERT INTO fila (usuario_id, tipo, alvo, rotulo) VALUES (1, 'baixar', 'u', 'u')")
+                c.execute("INSERT INTO templates (usuario_id, nome, layout) VALUES (1, 'Editor', 'cheio')")
+                # apagar um template continua levando as frases dele (ON DELETE CASCADE)
+                c.execute("DELETE FROM templates WHERE id = 1")
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM template_frases").fetchone()[0], 0)
+
+
+class TesteParteB(unittest.TestCase):
+    """Perfis, biblioteca, Editor e download em .zip."""
+    VIDEO = Path(__file__).parent / "exemplo_zoo.mp4"
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        from fastapi.testclient import TestClient
+        from app.busca import biblioteca, perfil
+        from app.multiplicador import renderizar, repositorio
+        from app.painel import servidor
+        cls.perfil, cls.biblioteca, cls.renderizar, cls.repo = perfil, biblioteca, renderizar, repositorio
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        banco.criar_tabelas()
+        perfil_cache = self.perfil._cache
+        perfil_cache.clear()
+        self.ids, self.itens = [], []
+        self.addCleanup(self._limpar)
+
+    def _limpar(self):
+        import sqlite3
+        for i in self.ids:
+            self.repo.excluir_template(i)
+        for i in self.itens:
+            self.repo.excluir_da_biblioteca(i)
+        with sqlite3.connect(config.ARQUIVO_BANCO) as conexao:
+            conexao.execute("DELETE FROM fila")
+
+    # ---------- leitura de perfil ----------
+
+    def test_reconhece_canais_e_recusa_o_resto(self):
+        norm = self.perfil.normalizar_alvo
+        self.assertEqual(norm("@IShowSpeed"), "https://www.youtube.com/@IShowSpeed")
+        self.assertEqual(norm("https://www.youtube.com/@canal/videos"), "https://www.youtube.com/@canal")
+        self.assertEqual(norm("youtube.com/channel/UCabc123"), "https://www.youtube.com/channel/UCabc123")
+        for ruim in ("", "banana", "https://www.youtube.com/watch?v=abcdefghijk", "https://instagram.com/perfil",
+                     "https://www.youtube.com/"):
+            with self.assertRaises(self.perfil.ErroPerfil, msg=ruim):
+                norm(ruim)
+
+    def test_velocidade_e_views_por_hora(self):
+        from datetime import datetime, timedelta, timezone
+        agora = datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc)
+        publicado = (agora - timedelta(hours=10)).isoformat()
+        self.assertEqual(self.perfil.velocidade(5000, publicado, agora), 500.0)
+        self.assertEqual(self.perfil.velocidade(5000, (agora - timedelta(minutes=5)).isoformat(), agora), 5000.0)  # minimo 1 h
+        self.assertIsNone(self.perfil.velocidade(None, publicado, agora))
+        self.assertIsNone(self.perfil.velocidade(100, None, agora))
+        self.assertIsNone(self.perfil.velocidade(100, "data estranha", agora))
+
+    def test_listar_monta_os_posts_e_usa_cache(self):
+        saida = json.dumps({"channel": "Canal Teste", "channel_id": "UC1", "uploader_id": "@teste", "entries": [
+            {"id": "aaaaaaaaaaa", "title": "Primeiro", "view_count": 1000, "duration": 61},
+            {"id": "bbbbbbbbbbb", "title": "Segundo", "view_count": 90000, "duration": 30},
+            None]})
+        with mock.patch.object(self.perfil, "_yt_dlp", return_value=saida) as ytdlp, \
+             mock.patch.object(self.perfil, "_datas", return_value={"aaaaaaaaaaa": "2026-11-01T00:00:00+00:00"}):
+            r = self.perfil.listar("@teste")
+            self.perfil.listar("@teste")                                       # segunda vez: cache
+        self.assertEqual(ytdlp.call_count, 1)
+        self.assertEqual(r["canal"]["nome"], "Canal Teste")
+        posts = r["posts"]
+        self.assertEqual([p["id"] for p in posts], ["aaaaaaaaaaa", "bbbbbbbbbbb"])
+        self.assertEqual(posts[0]["url"], "https://www.youtube.com/watch?v=aaaaaaaaaaa")
+        self.assertIsNotNone(posts[0]["velocidade"])
+        self.assertIsNone(posts[1]["velocidade"])                              # sem data, sem velocidade
+        with mock.patch.object(self.perfil, "_yt_dlp", return_value=saida), mock.patch.object(self.perfil, "_datas", return_value={}):
+            shorts = self.perfil.listar("@teste", aba="shorts")
+        self.assertIn("/shorts/", shorts["posts"][0]["url"])
+        with self.assertRaises(self.perfil.ErroPerfil):
+            self.perfil.listar("@teste", aba="lives")
+
+    def test_api_buscar_perfil(self):
+        with mock.patch.object(self.perfil, "listar", return_value={"canal": {"nome": "X"}, "posts": []}):
+            self.assertEqual(self.cliente.post("/api/perfis/buscar", json={"alvo": "@x"}).status_code, 200)
+        self.assertEqual(self.cliente.post("/api/perfis/buscar", json={"alvo": "banana"}).status_code, 400)
+        self.assertEqual(self.cliente.get("/perfis").status_code, 200)
+
+    def test_enviar_para_cortes_nao_repete(self):
+        a, b = "https://www.youtube.com/watch?v=perfil00001", "https://www.youtube.com/watch?v=perfil00002"
+        r = self.cliente.post("/api/perfis/enviar-cortes", json={"urls": [a, b]}).json()
+        self.assertEqual((r["na_fila"], r["ja_processados"]), (2, 0))
+        r = self.cliente.post("/api/perfis/enviar-cortes", json={"urls": [a]}).json()
+        self.assertEqual((r["na_fila"], r["ja_processados"]), (0, 1))          # ja esta na fila
+        self.assertEqual(self.cliente.post("/api/perfis/enviar-cortes", json={"urls": []}).status_code, 400)
+        self.assertEqual(self.cliente.post("/api/perfis/enviar-cortes", json={"urls": ["https://exemplo.com/x"]}).status_code, 400)
+        self.assertEqual(self.cliente.post("/api/perfis/enviar-cortes", json={"urls": [a] * 61}).status_code, 400)
+
+    # ---------- biblioteca ----------
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_baixar_para_biblioteca_e_usar_no_template(self):
+        import shutil
+        url = "https://www.youtube.com/watch?v=biblio00001"
+
+        def baixa_de_mentira(link, pasta):
+            pasta.mkdir(parents=True, exist_ok=True)
+            destino = pasta / "youtube_biblio00001.mp4"
+            shutil.copy(self.VIDEO, destino)
+            return VideoBaixado("youtube", "biblio00001", link, "Video da biblioteca", "Canal B", 19.0, destino)
+
+        with mock.patch.object(self.biblioteca.baixar, "baixar", side_effect=baixa_de_mentira) as baixa:
+            self.assertIn("Baixado", self.biblioteca.baixar_para_biblioteca(url, 1))
+            self.assertIn("Já estava", self.biblioteca.baixar_para_biblioteca(url, 1))    # nao baixa duas vezes
+            self.assertEqual(baixa.call_count, 1)
+        item = self.repo.buscar_na_biblioteca(1, "youtube", "biblio00001")
+        self.itens.append(item["id"])
+        lista = self.cliente.get("/api/biblioteca").json()["itens"]
+        self.assertTrue(any(i["id"] == item["id"] for i in lista))
+        self.assertEqual(self.cliente.get(f"/api/biblioteca/{item['id']}/miniatura.jpg").status_code, 200)
+        self.assertEqual(self.cliente.get("/api/biblioteca/999999/miniatura.jpg").status_code, 404)
+
+        # usar no template: a midia aponta para o arquivo da biblioteca e tirar a midia nao apaga o arquivo
+        template_id = self.cliente.post("/api/templates", json={"layout": "post"}).json()["id"]
+        self.ids.append(template_id)
+        r = self.cliente.post(f"/api/templates/{template_id}/midias", json={"biblioteca": [item["id"]]})
+        self.assertEqual(r.json()["novos"], 1)
+        self.assertEqual(self.cliente.post(f"/api/templates/{template_id}/midias", json={"biblioteca": [item["id"]]}).json()["novos"], 0)
+        midia = self.repo.listar_midias(template_id)[0]
+        self.assertEqual((midia["origem"], midia["arquivo"]), ("perfil", item["arquivo"]))
+        self.cliente.delete(f"/api/templates/{template_id}/midias/{midia['id']}")
+        self.assertTrue(config.caminho_absoluto(item["arquivo"]).exists())
+        self.assertEqual(self.cliente.post(f"/api/templates/{template_id}/midias", json={"biblioteca": [999999]}).status_code, 404)
+
+    def test_fila_baixa_para_a_biblioteca(self):
+        from app.painel import fila
+        banco.enfileirar(1, "baixar", "https://www.youtube.com/watch?v=biblio00002", "Titulo")
+        with mock.patch.object(fila.biblioteca, "baixar_para_biblioteca", return_value="Baixado: Titulo") as baixa:
+            self.assertTrue(fila.processar_proximo())
+        baixa.assert_called_once()
+        self.assertEqual(banco.listar_fila(1)[0]["resultado"], "Baixado: Titulo")
+
+    def test_baixar_nao_enfileira_o_que_ja_esta_na_biblioteca(self):
+        url = "https://www.youtube.com/watch?v=biblio00003"
+        self.assertEqual(self.cliente.post("/api/perfis/baixar", json={"urls": [url], "titulos": {url: "T"}}).json()["na_fila"], 1)
+        self.assertEqual(self.cliente.post("/api/perfis/baixar", json={"urls": [url]}).json()["ja_tem"], 1)
+
+    # ---------- Editor ----------
+
+    def test_editor_fica_separado_dos_templates(self):
+        r = self.cliente.post("/api/templates", json={"layout": "cheio", "nome": "Ajuste"})
+        self.assertEqual(r.status_code, 200)
+        ajuste = r.json()["id"]
+        self.ids.append(ajuste)
+        self.assertEqual([f["texto"] for f in self.repo.listar_frases(ajuste)], ["-"])      # frase muda do Editor
+        template = self.cliente.post("/api/templates", json={"layout": "post"}).json()["id"]
+        self.ids.append(template)
+        ids_templates = [t["id"] for t in self.cliente.get("/api/templates").json()["templates"]]
+        ids_editor = [a["id"] for a in self.cliente.get("/api/editor").json()["ajustes"]]
+        self.assertIn(template, ids_templates)
+        self.assertNotIn(ajuste, ids_templates)
+        self.assertIn(ajuste, ids_editor)
+        self.assertNotIn(template, ids_editor)
+        layouts = self.cliente.get("/api/templates").json()["layouts"]
+        self.assertNotIn("cheio", [l["id"] for l in layouts])                                # nao aparece na escolha de modelo
+        self.assertNotIn("cheio", self.cliente.get(f"/api/templates/{template}").json()["layouts"])
+        self.assertEqual(self.cliente.get("/editor").status_code, 200)
+        self.assertEqual(self.cliente.get(f"/editor/{ajuste}").status_code, 200)
+        self.assertEqual(self.cliente.get(f"/editor/{template}").status_code, 404)
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_editor_gera_tela_cheia_e_refaz_do_zero(self):
+        from app.painel import fila
+        ajuste = self.cliente.post("/api/templates", json={"layout": "cheio"}).json()["id"]
+        self.ids.append(ajuste)
+        enviado = self.cliente.post(f"/api/templates/{ajuste}/upload?nome=zoo.mp4", content=self.VIDEO.read_bytes()).json()["id"]
+        self.cliente.put(f"/api/templates/{ajuste}/midias/{enviado}", json={"zoom": 1.5, "pos_x": 30})
+        self.assertEqual(self.cliente.get(f"/api/templates/{ajuste}/previa.jpg").status_code, 200)
+
+        self.assertEqual(self.cliente.post(f"/api/templates/{ajuste}/gerar").json()["novas"], 1)
+        fila.processar_proximo()
+        saidas = self.cliente.get(f"/api/templates/{ajuste}/saidas").json()
+        self.assertEqual(saidas["contagem"]["pronto"], 1)
+        arquivo = config.caminho_absoluto(self.repo.ler_saida(saidas["saidas"][0]["id"])["arquivo"])
+        import subprocess
+        tamanho = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                                  "-of", "csv=p=0", str(arquivo)], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(tamanho, "1080,1920")
+
+        # gerar de novo sem apagar e recusado; apagando antes, refaz
+        self.assertEqual(self.cliente.post(f"/api/templates/{ajuste}/gerar").status_code, 409)
+        self.assertEqual(self.cliente.delete(f"/api/templates/{ajuste}/saidas").json()["apagados"], 1)
+        self.assertFalse(arquivo.exists())
+        self.assertEqual(self.cliente.post(f"/api/templates/{ajuste}/gerar").json()["novas"], 1)
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_zip_com_todos_os_videos_prontos(self):
+        import io, zipfile
+        from app.painel import fila
+        template_id = self.cliente.post("/api/templates", json={"layout": "meme", "nome": "Meu Lote"}).json()["id"]
+        self.ids.append(template_id)
+        self.assertEqual(self.cliente.get(f"/api/templates/{template_id}/saidas.zip").status_code, 404)    # nada pronto ainda
+        self.cliente.post(f"/api/templates/{template_id}/upload?nome=zoo.mp4", content=self.VIDEO.read_bytes())
+        self.cliente.post(f"/api/templates/{template_id}/frases", json={"textos": ["Frase um", "Frase dois"]})
+        self.cliente.post(f"/api/templates/{template_id}/gerar")
+        fila.processar_proximo()
+        resposta = self.cliente.get(f"/api/templates/{template_id}/saidas.zip")
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta.headers["content-type"], "application/zip")
+        with zipfile.ZipFile(io.BytesIO(resposta.content)) as z:
+            self.assertEqual(z.namelist(), ["Meu_Lote_01.mp4", "Meu_Lote_02.mp4"])
+            self.assertIsNone(z.testzip())
+        self.assertEqual(self.cliente.get("/api/templates/999999/saidas.zip").status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

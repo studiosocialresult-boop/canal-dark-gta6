@@ -9,6 +9,7 @@ import time
 
 from app import banco, config, pipeline
 from app.download import baixar
+from app.busca import biblioteca
 from app.multiplicador import lote
 
 log = config.criar_log("fila")
@@ -45,6 +46,9 @@ def executar(item) -> str:
     if item["tipo"] == "narrar":
         pipeline.narrar_e_renderizar(int(item["alvo"]), progresso=avisar)
         return "Narração pronta"
+    if item["tipo"] == "baixar":
+        avisar("Baixando o vídeo")
+        return biblioteca.baixar_para_biblioteca(item["alvo"], item["usuario_id"])
     if item["tipo"] == "lote":
         return lote.processar_template(int(item["alvo"]), progresso=avisar)
     raise ValueError(f"Tipo de item desconhecido: {item['tipo']}")

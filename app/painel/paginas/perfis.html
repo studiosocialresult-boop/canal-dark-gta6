@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block titulo %}Perfis{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-radar"/></svg></div>
+  <div>
+    <h1>Perfis</h1>
+    <p>Cole o @ de um canal do YouTube e veja quais vídeos mais bombam: mais vistos, mais recentes e os que crescem mais rápido (visualizações por hora).</p>
+  </div>
+</section>
+
+<form class="cartao busca-perfil" id="form-perfil">
+  <label class="busca" style="max-width:none;flex:1">
+    <svg class="i"><use href="#i-link"/></svg>
+    <input id="alvo" type="text" placeholder="@nomedocanal ou o link do canal" autocomplete="off" spellcheck="false">
+  </label>
+  <div class="segmentado" id="aba-perfil">
+    <button type="button" class="ativo" data-aba="videos">Vídeos</button>
+    <button type="button" data-aba="shorts">Shorts</button>
+  </div>
+  <button class="botao primario" type="submit" id="buscar-perfil"><svg class="i"><use href="#i-busca"/></svg>Buscar perfil</button>
+</form>
+<div class="erro-texto" id="erro-perfil" style="margin:8px 4px 0"></div>
+
+<section id="resultado" hidden>
+  <div class="barra-ferramentas" style="margin-top:18px">
+    <div class="canal-info" id="canal-info"></div>
+    <div class="filtros">
+      <div class="segmentado" id="ordem-perfil">
+        <button class="ativo" data-ordem="views">Mais vistos</button>
+        <button data-ordem="recentes">Mais recentes</button>
+        <button data-ordem="velocidade">Velocidade</button>
+      </div>
+    </div>
+  </div>
+  <div class="barra-selecao" id="barra-selecao">
+    <span id="contagem-selecao">Nenhum selecionado</span>
+    <button class="botao pequeno fantasma" id="todos">Selecionar todos</button>
+    <button class="botao pequeno fantasma" id="limpar">Limpar</button>
+    <span style="flex:1"></span>
+    <button class="botao pequeno" id="baixar-sel" disabled><svg class="i"><use href="#i-baixar"/></svg>Baixar vídeos</button>
+    <button class="botao pequeno primario" id="enviar-cortes" disabled><svg class="i"><use href="#i-tesoura"/></svg>Enviar para Cortes</button>
+  </div>
+  <div class="grade" id="posts"></div>
+  <p class="dica" style="margin-top:16px">A data (e por isso a velocidade) vem dos 15 vídeos mais recentes da lista. <b>Enviar para Cortes</b> processa o vídeo inteiro (a IA escolhe os melhores momentos). <b>Baixar vídeos</b> guarda o arquivo na biblioteca para usar nos Templates e no Editor.</p>
+</section>
+
+<section class="cartao vazio" id="vazio-perfil">
+  <svg class="arte" viewBox="0 0 160 160" fill="none"><defs><linearGradient id="gp" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#6a45ff"/><stop offset="1" stop-color="#ff4f8b"/></linearGradient></defs>
+    <circle cx="80" cy="80" r="62" stroke="url(#gp)" stroke-width="3" opacity=".35"/><circle cx="80" cy="80" r="40" stroke="url(#gp)" stroke-width="3" opacity=".6"/><circle cx="80" cy="80" r="14" fill="url(#gp)"/>
+    <path d="M80 80 126 40" stroke="url(#gp)" stroke-width="3" stroke-linecap="round"/></svg>
+  <h2>Descubra o que está bombando</h2>
+  <p>Digite o @ de um canal de GTA 6 para ver os vídeos dele ordenados por visualizações, data ou velocidade de crescimento.</p>
+</section>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/perfis.js"></script>{% endblock %}

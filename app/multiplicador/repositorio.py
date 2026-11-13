@@ -24,9 +24,13 @@ def criar_template(usuario_id: int, layout: str, nome: str = "Novo template") ->
     if layout not in modelos.LAYOUTS:
         raise ValueError("Layout desconhecido.")
     with closing(banco.conectar()) as conexao, conexao:
-        return conexao.execute(
+        template_id = conexao.execute(
             "INSERT INTO templates (usuario_id, nome, layout) VALUES (?, ?, ?)",
             (usuario_id, nome.strip() or "Novo template", layout)).lastrowid
+        if layout == "cheio":      # o Editor nao tem frase: uma frase muda faz o cruzamento dar 1 video por midia
+            conexao.execute("INSERT INTO template_frases (template_id, texto, origem) VALUES (?, '-', 'editor')",
+                            (template_id,))
+    return template_id
 
 
 def ler_template(template_id: int) -> dict | None:
@@ -39,8 +43,10 @@ def ler_template(template_id: int) -> dict | None:
     return dados
 
 
-def listar_templates(usuario_id: int) -> list[dict]:
-    """Templates do usuario, do mais recente para o mais antigo, com contadores e a capa."""
+def listar_templates(usuario_id: int, editor: bool = False) -> list[dict]:
+    """Templates do usuario, do mais recente para o mais antigo, com contadores e a capa.
+    editor=False: so os templates de verdade; editor=True: so os ajustes da tela Editor."""
+    comparacao = "=" if editor else "!="
     with closing(banco.conectar()) as conexao:
         linhas = conexao.execute(
             "SELECT t.*, "
@@ -51,7 +57,8 @@ def listar_templates(usuario_id: int) -> list[dict]:
             " (SELECT COUNT(*) FROM template_saidas s WHERE s.template_id = t.id AND s.estado = 'falhou') AS n_falhas, "
             " (SELECT s.id FROM template_saidas s WHERE s.template_id = t.id AND s.estado = 'pronto' "
             "   ORDER BY s.id LIMIT 1) AS saida_capa "
-            "FROM templates t WHERE t.usuario_id = ? ORDER BY t.atualizado_em DESC, t.id DESC",
+            f"FROM templates t WHERE t.usuario_id = ? AND t.layout {comparacao} 'cheio' "
+            "ORDER BY t.atualizado_em DESC, t.id DESC",
             (usuario_id,)).fetchall()
     return [dict(l) | {"config": json.loads(l["config"] or "{}")} for l in linhas]
 
@@ -121,6 +128,26 @@ def adicionar_cortes(template_id: int, corte_ids: list[int], zona: int = 1) -> i
     return entrou
 
 
+def adicionar_da_biblioteca(template_id: int, biblioteca_ids: list[int], zona: int = 1) -> int:
+    """Poe videos da biblioteca (baixados pela tela Perfis) como midias. Devolve quantos entraram."""
+    entrou = 0
+    for item_id in biblioteca_ids:
+        item = ler_biblioteca(item_id)
+        if item is None:
+            continue
+        with closing(banco.conectar()) as conexao, conexao:
+            ja = conexao.execute(
+                "SELECT 1 FROM template_midias WHERE template_id = ? AND arquivo = ? AND zona = ?",
+                (template_id, item["arquivo"], zona)).fetchone()
+            if ja:
+                continue
+            conexao.execute(
+                "INSERT INTO template_midias (template_id, origem, arquivo, rotulo, zona) VALUES (?, 'perfil', ?, ?, ?)",
+                (template_id, item["arquivo"], item["titulo"] or item["id_externo"], zona))
+            entrou += 1
+    return entrou
+
+
 def adicionar_arquivo(template_id: int, arquivo_relativo: str, rotulo: str, origem: str = "upload",
                       zona: int = 1) -> int:
     with closing(banco.conectar()) as conexao, conexao:
@@ -154,7 +181,7 @@ def excluir_midia(midia_id: int) -> None:
     midia = ler_midia(midia_id)
     with closing(banco.conectar()) as conexao, conexao:
         conexao.execute("DELETE FROM template_midias WHERE id = ?", (midia_id,))
-    if midia and midia["origem"] in ("upload", "perfil") and midia["arquivo"]:
+    if midia and midia["origem"] == "upload" and midia["arquivo"]:
         (config.PASTA_DADOS / midia["arquivo"]).unlink(missing_ok=True)
 
 
@@ -263,6 +290,20 @@ def atualizar_saida(saida_id: int, **campos) -> None:
                         (*campos.values(), saida_id))
 
 
+def apagar_saidas(template_id: int) -> int:
+    """Apaga os videos gerados (linhas e arquivos), para gerar de novo. Devolve quantos eram."""
+    saidas = listar_saidas(template_id)
+    with closing(banco.conectar()) as conexao, conexao:
+        conexao.execute("DELETE FROM template_saidas WHERE template_id = ?", (template_id,))
+    pasta = pasta_do_template(template_id)
+    for saida in saidas:
+        if saida["arquivo"]:
+            arquivo = config.PASTA_DADOS / saida["arquivo"]
+            if arquivo.resolve().is_relative_to(pasta.resolve()):
+                arquivo.unlink(missing_ok=True)
+    return len(saidas)
+
+
 def contagem_saidas(template_id: int) -> dict:
     with closing(banco.conectar()) as conexao:
         linhas = conexao.execute(
@@ -298,3 +339,43 @@ def salvar_perfil(usuario_id: int, rotulo: str, dados: dict) -> int:
 def excluir_perfil(perfil_id: int) -> None:
     with closing(banco.conectar()) as conexao, conexao:
         conexao.execute("DELETE FROM perfis_pagina WHERE id = ?", (perfil_id,))
+
+
+# ---------- biblioteca (videos baixados pela tela Perfis) ----------
+
+def listar_biblioteca(usuario_id: int) -> list[dict]:
+    with closing(banco.conectar()) as conexao:
+        return [dict(l) for l in conexao.execute(
+            "SELECT * FROM biblioteca WHERE usuario_id = ? ORDER BY id DESC", (usuario_id,))]
+
+
+def ler_biblioteca(item_id: int) -> dict | None:
+    with closing(banco.conectar()) as conexao:
+        return _dict(conexao.execute("SELECT * FROM biblioteca WHERE id = ?", (item_id,)).fetchone())
+
+
+def buscar_na_biblioteca(usuario_id: int, plataforma: str, id_externo: str) -> dict | None:
+    with closing(banco.conectar()) as conexao:
+        return _dict(conexao.execute(
+            "SELECT * FROM biblioteca WHERE usuario_id = ? AND plataforma = ? AND id_externo = ?",
+            (usuario_id, plataforma, id_externo)).fetchone())
+
+
+def registrar_na_biblioteca(usuario_id: int, plataforma: str, id_externo: str, url: str, titulo: str,
+                            canal: str, duracao_s: float, arquivo: str) -> int:
+    with closing(banco.conectar()) as conexao, conexao:
+        conexao.execute(
+            "INSERT OR REPLACE INTO biblioteca (usuario_id, plataforma, id_externo, url, titulo, canal, duracao_s, arquivo) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (usuario_id, plataforma, id_externo, url, titulo, canal, duracao_s, arquivo))
+        return conexao.execute(
+            "SELECT id FROM biblioteca WHERE usuario_id = ? AND plataforma = ? AND id_externo = ?",
+            (usuario_id, plataforma, id_externo)).fetchone()["id"]
+
+
+def excluir_da_biblioteca(item_id: int) -> None:
+    item = ler_biblioteca(item_id)
+    with closing(banco.conectar()) as conexao, conexao:
+        conexao.execute("DELETE FROM biblioteca WHERE id = ?", (item_id,))
+    if item:
+        (config.PASTA_DADOS / item["arquivo"]).unlink(missing_ok=True)

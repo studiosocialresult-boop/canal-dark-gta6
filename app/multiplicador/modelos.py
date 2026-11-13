@@ -9,6 +9,13 @@ import copy
 LARGURA, ALTURA = 1080, 1920
 
 LAYOUTS = {
+    # Tela cheia: o video ocupa tudo, sem frase nem perfil. Usado pela tela Editor (fica fora das listas de layouts).
+    "cheio": {
+        "nome": "Tela cheia (Editor)",
+        "descricao": "O vídeo ocupa a tela inteira, só com o enquadramento ajustado.",
+        "perfil_padrao": None, "mostra_perfil": False, "zonas_de_video": 1, "alinhamento_padrao": "centro",
+        "oculto": True,
+    },
     "post": {
         "nome": "Post de rede social",
         "descricao": "Foto e nome da página no topo, a frase logo abaixo e o vídeo ocupando o resto.",
@@ -77,3 +84,8 @@ def posicao_do_perfil(layout: str, config: dict) -> str:
 
 def alinhamento(layout: str, config: dict) -> str:
     return config["perfil"]["alinhamento"] or LAYOUTS[layout]["alinhamento_padrao"]
+
+
+def layouts_visiveis() -> dict:
+    """Os layouts que o dono escolhe no assistente (o de tela cheia e so do Editor)."""
+    return {k: v for k, v in LAYOUTS.items() if not v.get("oculto")}

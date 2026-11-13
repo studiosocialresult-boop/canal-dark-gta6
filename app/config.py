@@ -18,6 +18,7 @@ PASTA_BRUTOS = PASTA_DADOS / "brutos"
 PASTA_CORTES = PASTA_DADOS / "cortes"
 PASTA_TRANSCRICOES = PASTA_DADOS / "transcricoes"
 PASTA_NARRACOES = PASTA_DADOS / "narracoes"
+PASTA_BIBLIOTECA = PASTA_DADOS / "biblioteca"
 PASTA_LOGS = PASTA_DADOS / "logs"
 ARQUIVO_BANCO = PASTA_DADOS / "canal.db"
 PASTA_PROMPTS = RAIZ / "prompts"
@@ -68,7 +69,7 @@ CONFIG_PADRAO = {
 
 def garantir_pastas() -> None:
     """Cria as pastas de dados que ainda nao existem."""
-    for pasta in (PASTA_BRUTOS, PASTA_CORTES, PASTA_TRANSCRICOES, PASTA_NARRACOES, PASTA_LOGS):
+    for pasta in (PASTA_BRUTOS, PASTA_CORTES, PASTA_TRANSCRICOES, PASTA_NARRACOES, PASTA_BIBLIOTECA, PASTA_LOGS):
         pasta.mkdir(parents=True, exist_ok=True)
 
 

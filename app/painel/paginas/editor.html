@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block titulo %}Editor{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-lapis"/></svg></div>
+  <div>
+    <h1>Editor</h1>
+    <p>Ajuste rápido de um vídeo para o formato vertical: escolha o vídeo, enquadre com zoom e posição e baixe o resultado.</p>
+  </div>
+  <div class="acoes">
+    <button class="botao primario" id="novo-ajuste"><svg class="i"><use href="#i-mais"/></svg>Novo ajuste</button>
+  </div>
+</section>
+
+<section class="grade-templates" id="grade-ajustes"></section>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/editor.js"></script>{% endblock %}

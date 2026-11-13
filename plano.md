@@ -204,7 +204,13 @@ Evitar `max`: custa muito e costuma pensar demais.
   - Pronto: tela Templates (lista com capa, estado e contadores) e o assistente de 7 passos com **prévia ao vivo desenhada pelo servidor** (mesmo código do vídeo final, então "o que você vê é o que sai"). Layouts post, meme e viral; perfil com foto, tema, alinhamento e tamanhos; perfis salvos; frases escritas ou geradas pela IA (Haiku, `prompts/frases_variacoes.md`); vídeos vindos de cortes (trecho do original, sem legenda) ou enviados do computador, com zoom e posição; estilo do texto; seleção de variações com contador; geração em lote pela fila (um vídeo por vez, progresso `N/M`) e download individual ou de todos.
   - Código: `app/multiplicador/` (`modelos`, `cartao` com Pillow, `renderizar` com ffmpeg, `frases`, `lote`, `repositorio`) e `app/painel/api_templates.py`. Tabelas novas: `templates`, `template_midias`, `template_frases`, `template_saidas`, `perfis_pagina`; a fila ganhou o tipo `lote`.
   - Medido: 1 vídeo de 32 s no layout post leva cerca de 12 s para renderizar neste computador (50 variações de vídeos curtos: uns 10 a 15 minutos).
-  - **Falta (parte B):** tela **Perfis** (analisador do YouTube e envio para Cortes), tela **Editor**, **regra contra repetição** (entra junto com o agendador, Fase 5) e o botão "Baixar tudo" em .zip (hoje baixa um por vez).
+- **Andamento (13/11/2026) — parte B: construída.**
+  - **Perfis:** colar @ ou link de canal do YouTube; abas Vídeos e Shorts; ordenar por mais vistos, mais recentes ou **velocidade** (visualizações por hora); selecionar vários e **Enviar para Cortes** (fila de processamento) ou **Baixar vídeos** (vão para a biblioteca, usada em Templates e no Editor). Sem chave de API: lista com yt-dlp (`app/busca/perfil.py`) e lê a data na página dos 15 vídeos mais recentes (o feed público do YouTube deu 404, então não é usado). Curtidas e comentários não aparecem (a listagem rápida não traz). Instagram e TikTok: não implementados (coleta não oficial, instável); entram como módulos ao lado deste.
+  - **Editor:** ajuste rápido para tela cheia 9:16 (zoom, posição, "caber inteiro" com fundo desfocado ou preto), com prévia ao vivo e download. Usa o mesmo motor dos Templates (layout oculto `cheio`; os ajustes ficam separados da lista de Templates).
+  - **Baixar tudo (.zip)** nos Templates; **biblioteca** de vídeos baixados (`dados/biblioteca/`, tabela `biblioteca`).
+  - Banco: `fila` e `templates` perderam a trava de tipos/layouts fixos (migração automática e testada, sem perder dados). Fila ganhou o tipo `baixar`.
+  - **Regra contra repetição:** continua para a Fase 5, junto com o agendador (é ele que distribui os vídeos entre contas).
+  - **Fase 4 fechada**, faltando só o dono montar e gerar um template de verdade (3 vídeos × 3 frases = 9) para o critério de "pronto".
 
 ### Fase 5 — Postagem e agendamento
 - Ordem: YouTube Shorts primeiro (API mais simples), depois Instagram Reels, Facebook e TikTok.

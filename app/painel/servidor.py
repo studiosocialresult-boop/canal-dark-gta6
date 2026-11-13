@@ -19,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from app import banco, config
 from app.download import baixar
-from app.painel import api_templates, fila
+from app.painel import api_perfis, api_templates, fila
 
 PASTA = Path(__file__).resolve().parent
 USUARIO = config.USUARIO_PADRAO
@@ -35,9 +35,9 @@ MENU = [
     {"id": "cortes", "nome": "Cortes", "icone": "tesoura", "fase": 3, "pronto": True, "descricao": ""},
     {"id": "templates", "nome": "Templates", "icone": "camadas", "fase": 4, "pronto": True,
      "descricao": "Crie dezenas de vídeos de uma vez: um modelo de layout, várias frases e vídeos."},
-    {"id": "perfis", "nome": "Perfis", "icone": "radar", "fase": 4,
+    {"id": "perfis", "nome": "Perfis", "icone": "radar", "fase": 4, "pronto": True,
      "descricao": "Analise um perfil ou canal e traga os posts mais vistos direto para os cortes."},
-    {"id": "editor", "nome": "Editor", "icone": "lapis", "fase": 4,
+    {"id": "editor", "nome": "Editor", "icone": "lapis", "fase": 4, "pronto": True,
      "descricao": "Ajuste rápido de um vídeo para o formato vertical."},
     {"id": "agenda", "nome": "Agenda", "icone": "calendario", "fase": 5,
      "descricao": "O calendário do que está agendado em cada conta, rede por rede."},
@@ -90,6 +90,7 @@ def criar_app() -> FastAPI:
         return paginas.TemplateResponse(request, "configuracoes.html", contexto(request, "configuracoes"))
 
     api_templates.registrar(app, paginas, contexto)
+    api_perfis.registrar(app, paginas, contexto)
 
     @app.get("/{tela}")
     def pagina_futura(request: Request, tela: str):

@@ -10,7 +10,7 @@
   let T = null;                  // dados do template (veio do servidor)
   let passo = 1;
   let previaFrase = 0, previaMidia = 0, midiaEmEdicao = null, textoDigitado = "";
-  let cortesDoCanal = null, sugestoes = [], saidas = null, relogioSaidas = null;
+  let cortesDoCanal = null, bibliotecaVideos = null, sugestoes = [], saidas = null, relogioSaidas = null;
   let pendente = {}, relogioSalvar = null, relogioPrevia = null;
   const temporizadores = {};
 
@@ -162,6 +162,7 @@
       case "add-frase": await adicionarFrase(); break;
       case "tirar-frase": await acao(() => api(`/api/templates/${ID}/frases/${dado.id}`, { metodo: "DELETE" }), true); break;
       case "add-corte": await alternarCorte(Number(dado.id), Number(dado.zona)); break;
+      case "add-biblioteca": await alternarBiblioteca(Number(dado.id)); break;
       case "editar-midia": midiaEmEdicao = midiaEmEdicao === Number(dado.id) ? null : Number(dado.id); desenharPasso(); atualizarPrevia(); break;
       case "tirar-midia": if (midiaEmEdicao === Number(dado.id)) midiaEmEdicao = null; e.stopPropagation();
         await acao(() => api(`/api/templates/${ID}/midias/${dado.id}`, { metodo: "DELETE" }), true); break;
@@ -333,10 +334,32 @@
         <label class="botao pequeno" style="cursor:pointer;justify-self:start">${icone("baixar", "transform:rotate(180deg)")}Enviar um vídeo<input type="file" id="arquivo-videos" data-zona="2" accept="video/*" hidden></label></div>` : "";
     return `<h2>Vídeos</h2><p class="dica">Escolha de onde vêm os vídeos. Cada vídeo será combinado com cada frase.</p>
       <div class="secao"><h3>Cortes do seu canal</h3>${cortes}</div>
+      <div class="secao"><h3>Biblioteca (baixados na tela Perfis)</h3>${bibliotecaHtml()}</div>
       <div class="secao"><h3>Enviar do computador</h3>
         <label class="envio" id="area-envio"><span>${icone("baixar", "transform:rotate(180deg);width:26px;height:26px")}</span><b>Clique ou arraste vídeos aqui</b><small>MP4, MOV, WEBM ou MKV, até 2 GB cada</small>
           <input type="file" id="arquivo-videos" data-zona="1" accept="video/*" multiple hidden></label><div id="progresso-envio"></div></div>
       <div class="secao"><h3>Vídeos deste template (${zona1.length})</h3>${meus}${ajuste}</div>${segunda}`;
+  }
+
+  const naTemplatePorArquivo = (arquivo, zona = 1) => T.midias.find((m) => m.arquivo === arquivo && m.zona === zona);
+
+  function bibliotecaHtml() {
+    if (bibliotecaVideos === null) return '<span class="dica">Carregando…</span>';
+    if (!bibliotecaVideos.length) return '<div class="vazio-pequeno">Vazia. Na tela Perfis, escolha vídeos e clique em "Baixar vídeos".</div>';
+    return `<div class="miniaturas">${bibliotecaVideos.map((b) => `<button class="miniatura ${naTemplatePorArquivo(b.arquivo) ? "escolhida" : ""}" data-acao="add-biblioteca" data-id="${b.id}" title="${esc(b.titulo || "")}">
+      <img src="${b.miniatura}" alt="" loading="lazy" onerror="this.style.display='none'"><span class="marca">${icone("check")}</span><span class="legenda">${esc(b.titulo || b.id_externo)}</span></button>`).join("")}</div>`;
+  }
+
+  async function carregarBiblioteca() {
+    try { bibliotecaVideos = (await api("/api/biblioteca")).itens; } catch (e) { bibliotecaVideos = []; }
+    if (passo === 4) desenharPasso();
+  }
+
+  async function alternarBiblioteca(itemId) {
+    const item = bibliotecaVideos.find((b) => b.id === itemId);
+    const existente = naTemplatePorArquivo(item.arquivo);
+    if (existente) await acao(() => api(`/api/templates/${ID}/midias/${existente.id}`, { metodo: "DELETE" }), true);
+    else await acao(() => api(`/api/templates/${ID}/midias`, { metodo: "POST", corpo: { biblioteca: [itemId] } }), true);
   }
 
   function miniaturaCorte(c, zona) {
@@ -455,7 +478,7 @@
             ${s.url ? `<a class="botao pequeno primario" href="${s.url}?baixar=1" download>${icone("baixar")}Baixar</a>` : `<span class="selo ${s.estado === "falhou" ? "erro" : ""}">${s.estado === "renderizando" ? "Montando…" : s.estado === "falhou" ? "Falhou" : "Na fila"}</span>`}</div></div>`).join("")}</div>` : "";
     caixa.innerHTML = `<div style="display:grid;gap:18px">${topo}
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${botao}
-        ${c.pronto ? `<button class="botao" data-acao="baixar-todos">${icone("baixar")}Baixar todos (${c.pronto})</button>` : ""}
+        ${c.pronto ? `<a class="botao" href="/api/templates/${ID}/saidas.zip" download>${icone("baixar")}Baixar tudo (.zip · ${c.pronto})</a>` : ""}
         ${!c.total && r.total === 0 ? '<span class="dica">Escolha vídeos e frases nos passos anteriores.</span>' : ""}</div>${grade}</div>`;
   }
 
@@ -491,6 +514,7 @@
     desenharPassos();
     if (passo === 1) carregarPerfis();
     if (passo === 4 && cortesDoCanal === null) carregarCortes();
+    if (passo === 4 && bibliotecaVideos === null) carregarBiblioteca();
     if (passo === 7) { atualizarSaidas(); }
     const envio = $("#area-envio");
     if (envio) {

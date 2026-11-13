@@ -25,6 +25,7 @@ def processar_template(template_id: int, progresso=None) -> str:
         except Exception as erro:                      # um video com problema nao derruba o lote
             log.error("Video %d falhou: %s", saida["id"], erro)
     contagem = repositorio.contagem_saidas(template_id)
+    prontos = contagem["pronto"]
     if contagem["falhou"]:
-        return f"{contagem['pronto']} prontos, {contagem['falhou']} com falha"
-    return f"{contagem['pronto']} vídeos prontos"
+        return f"{prontos} prontos, {contagem['falhou']} com falha"
+    return f"{prontos} vídeo pronto" if prontos == 1 else f"{prontos} vídeos prontos"
