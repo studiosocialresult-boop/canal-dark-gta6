@@ -250,6 +250,14 @@ Evitar `max`: custa muito e costuma pensar demais.
 
 ### Fase 7 — VPS
 - Subir tudo numa VPS Linux, configurar o cron das 6h, logs e aviso quando algo falhar.
+- **Como ficou (13/11/2026):**
+  - **Servidor:** Oracle São Paulo (VM.Standard.E5.Flex, 2 vCPU, 11 GB, Ubuntu 24.04). O painel roda como serviço `canal-dark` (systemd): liga com a VPS e reinicia sozinho se cair. A "rotina das 6h" é a própria busca diária dentro do painel (não precisa de cron).
+  - **Acesso:** só pela rede privada do **Tailscale**, em `https://canal-dark.tail8d61c4.ts.net` (precisa do app Tailscale ligado e logado na mesma conta). O painel escuta só dentro da VPS (127.0.0.1); a porta não abre para a internet. Endereço gravado em `~/canal-dark-vps.env` na VPS (`CANAL_URL_PAINEL`): é ele que vai nos cadastros das redes (`…/contas/retorno/youtube`, `/meta`, `/tiktok`).
+  - **Publicar atualizações:** `publicar_na_vps.bat` (leva o código salvo no git, o `.env` e o `cookies.txt`). `trocar_cookies_vps.bat` quando o YouTube pedir login. `ver_logs_vps.bat` mostra o log. Os dados foram levados uma vez (`--levar-dados`); o painel do computador virou **painel de testes** (`CANAL_PAINEL_DE_TESTE=1`: não publica nem busca sozinho).
+  - **Avisos:** Telegram (`app/avisos.py`), ligados só na VPS: falha na fila, na busca, post que não saiu, conta para reconectar, painel religado e resumo da busca do dia. Falta o dono criar o robô.
+  - **Log:** `dados/logs/canal.log`, até 5 arquivos de 5 MB.
+  - **Teste real na VPS:** busca com 26 vídeos; vídeo de 8 min virou 2 cortes narrados em 6 min. Na VPS a data dos vídeos só aparece com o login (cookies), já ajustado.
+  - **Custo:** a E5.Flex usa os créditos do teste grátis da Oracle (acabam por volta de 13/12/2026). Antes disso: pagar (~US$ 40/mês, conferir), conseguir a A1 gratuita ou trocar de provedor (o `publicar_na_vps.bat` reinstala em qualquer VPS).
 - **Pronto quando:** roda 7 dias sem intervenção.
 - **Modelo:** Opus 5.5 para o deploy; **Fable 5.2** para a revisão final de segurança e do código inteiro.
 
