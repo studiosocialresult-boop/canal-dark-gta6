@@ -52,6 +52,71 @@
     } catch (erro) { aviso(erro.message, { tipo: "erro" }); }
   }
 
+  // ---------- chaves e integracoes ----------
+  const NOMES_REDE = { youtube: "YouTube", meta: "Instagram e Facebook", tiktok: "TikTok" };
+
+  function desenharChaves(dados) {
+    const grupos = new Map();
+    for (const c of dados.chaves) { if (!grupos.has(c.grupo)) grupos.set(c.grupo, []); grupos.get(c.grupo).push(c); }
+    $("#chaves").innerHTML = [...grupos].map(([grupo, itens]) => `
+      <div class="grupo-chaves"><b class="grupo-titulo">${esc(grupo)}</b>
+        ${itens.map((c) => `<form class="chave" data-nome="${c.nome}">
+          <div class="chave-info"><span class="selo ${c.preenchida ? "ok" : "erro"}">${c.preenchida ? "Preenchida" : "Faltando"}</span>
+            <div><b>${esc(c.rotulo)}</b><small>${esc(c.ajuda)}</small></div></div>
+          <div class="chave-campo">
+            <input class="campo" type="password" autocomplete="off" spellcheck="false" placeholder="${c.preenchida ? "Colar para trocar" : "Colar aqui"}" aria-label="${esc(c.rotulo)}">
+            <button class="botao pequeno primario" type="submit">Salvar</button>
+            ${c.preenchida ? '<button class="botao pequeno fantasma" type="button" data-apagar>Apagar</button>' : ""}
+          </div></form>`).join("")}
+        ${grupo === "Avisos no Telegram" ? `<div class="chave-acoes">
+          <button class="botao pequeno" type="button" id="tg-descobrir">Descobrir conversa</button>
+          <button class="botao pequeno" type="button" id="tg-testar">Mandar teste</button>
+          <small class="dica">Depois de salvar o token, mande “oi” para o seu robô no Telegram e clique em <b>Descobrir conversa</b>.</small></div>` : ""}
+      </div>`).join("");
+    $("#retornos").innerHTML = Object.entries(dados.retornos).map(([rede, url]) => `
+      <div class="retorno"><small>${NOMES_REDE[rede]}</small><code>${esc(url)}</code>
+        <button class="botao pequeno fantasma" type="button" data-copiar="${esc(url)}">Copiar</button></div>`).join("");
+  }
+
+  async function carregarChaves() {
+    try { desenharChaves(await api("/api/chaves")); }
+    catch (erro) { $("#chaves").innerHTML = `<p class="erro-texto">${esc(erro.message)}</p>`; }
+  }
+
+  $("#chaves").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target, campo = form.querySelector("input");
+    if (!campo.value.trim()) { campo.focus(); return; }
+    try {
+      await api("/api/chaves", { metodo: "PUT", corpo: { nome: form.dataset.nome, valor: campo.value } });
+      campo.value = ""; aviso("Chave salva."); carregarChaves(); carregar();
+    } catch (erro) { aviso(erro.message, { tipo: "erro" }); }
+  });
+
+  $("#chaves").addEventListener("click", async (e) => {
+    const alvo = e.target.closest("button"); if (!alvo) return;
+    try {
+      if (alvo.hasAttribute("data-apagar")) {
+        const form = alvo.closest("form");
+        if (!confirm("Apagar esta chave do servidor?")) return;
+        await api("/api/chaves", { metodo: "PUT", corpo: { nome: form.dataset.nome, valor: "" } });
+        aviso("Chave apagada."); carregarChaves(); carregar();
+      } else if (alvo.id === "tg-descobrir") {
+        await api("/api/chaves/telegram/descobrir", { metodo: "POST" }); aviso("Conversa encontrada e salva."); carregarChaves();
+      } else if (alvo.id === "tg-testar") {
+        await api("/api/chaves/telegram/testar", { metodo: "POST" }); aviso("Mensagem enviada. Confira o Telegram.");
+      }
+    } catch (erro) { aviso(erro.message, { tipo: "erro" }); }
+  });
+
+  $("#retornos").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-copiar]"); if (!b) return;
+    try { await navigator.clipboard.writeText(b.dataset.copiar); aviso("Endereço copiado."); }
+    catch { aviso("Não consegui copiar. Selecione o endereço e copie com Ctrl+C.", { tipo: "erro" }); }
+  });
+
+  carregarChaves();
+
   $("#salvar").onclick = async () => {
     $("#salvar").disabled = true;
     try {

@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from app import avisos, banco, config
 from app.download import baixar
 from app.busca import diaria
-from app.painel import api_busca, api_perfis, api_postagem, api_templates, fila
+from app.painel import api_busca, api_chaves, api_perfis, api_postagem, api_templates, fila
 from app.postagem import agendador
 
 PASTA = Path(__file__).resolve().parent
@@ -120,6 +120,7 @@ def criar_app() -> FastAPI:
     api_perfis.registrar(app, paginas, contexto)
     api_postagem.registrar(app, paginas, contexto)
     api_busca.registrar(app, paginas, contexto)
+    api_chaves.registrar(app)
 
     @app.get("/{tela}")
     def pagina_futura(request: Request, tela: str):

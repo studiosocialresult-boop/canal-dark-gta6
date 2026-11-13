@@ -1,6 +1,7 @@
 """Publica o Canal Dark na VPS a partir deste computador.
 
 Leva o codigo (a ultima versao salva no git), o .env e o cookies.txt e reinstala o servico.
+As chaves que ja existem no .env da VPS (ex.: colocadas pela tela Configuracoes) nao sao trocadas.
 Com --levar-dados, leva tambem o banco, os cortes, os templates e a biblioteca (feito uma vez,
 na mudanca para a VPS) e transforma o painel deste computador em painel de testes.
 
@@ -109,12 +110,15 @@ def publicar(levar_dados: bool = False) -> None:
         print("2/4 Enviando para a VPS…")
         _ssh(destino, chave, f"mkdir -p {remoto}/dados", mostrar=False)
         _enviar(destino, chave, codigo, "/tmp/canal-codigo.tar")
-        _enviar(destino, chave, _env_para_vps(pasta), f"{remoto}/.env")
+        # O .env nao e copiado por cima: as chaves que ja existem na VPS (colocadas pelo painel) ficam.
+        _enviar(destino, chave, _env_para_vps(pasta), "/tmp/canal-env-novo")
         if (RAIZ / "cookies.txt").exists():
             _enviar(destino, chave, RAIZ / "cookies.txt", f"{remoto}/cookies.txt")
         # Troca o codigo antigo pelo novo (dados, .env, cookies e .venv ficam).
         _ssh(destino, chave, f"cd {remoto} && rm -rf app prompts deploy testes && tar -xf /tmp/canal-codigo.tar "
                              f"&& rm /tmp/canal-codigo.tar", mostrar=False)
+        _ssh(destino, chave, f"cd {remoto} && python3 -m app.chaves juntar /tmp/canal-env-novo .env "
+                             f"&& rm /tmp/canal-env-novo")
         if levar_dados:
             print("   Levando os dados (banco, cortes, templates, biblioteca)…")
             dados = _pacote_dos_dados(pasta)

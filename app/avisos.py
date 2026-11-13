@@ -1,8 +1,8 @@
 """Avisos no Telegram: o painel manda uma mensagem quando algo falha (ou quando a busca do dia termina).
 
 So funciona com CANAL_AVISOS=1 (ligado na VPS; no computador fica desligado para nao avisar em dobro)
-e com TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID no .env. Sem isso, nao faz nada e nunca quebra o resto.
-O token nunca aparece em log nem em mensagem de erro.
+e com TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID no .env (podem ser colocados pela tela Configuracoes).
+Sem isso, nao faz nada e nunca quebra o resto. O token nunca aparece em log nem em mensagem de erro.
 
 Rodar sozinho:
     python -m app.avisos descobrir   -> depois de mandar "oi" para o seu robo, grava o TELEGRAM_CHAT_ID no .env
@@ -15,7 +15,7 @@ import time
 
 import requests
 
-from app import config
+from app import chaves, config
 
 log = config.criar_log("avisos")
 
@@ -61,26 +61,29 @@ def avisar(texto: str, chave: str | None = None, esperar: bool = False) -> bool:
 
 
 def descobrir_chat() -> str:
-    """Le a ultima mensagem mandada ao robo e grava o id da conversa no .env."""
+    """Le a ultima mensagem mandada ao robo e grava o id da conversa no .env. Levanta ErroChave se nao der."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        raise SystemExit("Falta o TELEGRAM_BOT_TOKEN no arquivo .env.")
+        raise chaves.ErroChave("Primeiro salve o token do robô.")
     try:
         dados = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=20).json()
     except (requests.RequestException, ValueError):
-        raise SystemExit("O Telegram nao respondeu. Confira o token e a internet.")
+        raise chaves.ErroChave("O Telegram não respondeu. Tente de novo em instantes.")
     if not dados.get("ok"):
-        raise SystemExit("O Telegram recusou o token. Confira se copiou ele inteiro.")
+        raise chaves.ErroChave("O Telegram recusou o token. Confira se copiou ele inteiro.")
     conversas = [u["message"]["chat"]["id"] for u in dados.get("result", []) if "message" in u]
     if not conversas:
-        raise SystemExit("Nenhuma mensagem encontrada. Abra o seu robo no Telegram, mande 'oi' e rode de novo.")
+        raise chaves.ErroChave("Não achei nenhuma mensagem. Abra o seu robô no Telegram, mande “oi” e tente de novo.")
     chat = str(conversas[-1])
-    arquivo = config.RAIZ / ".env"
-    linhas = [l for l in arquivo.read_text(encoding="utf-8").splitlines() if not l.startswith("TELEGRAM_CHAT_ID=")]
-    linhas.append(f"TELEGRAM_CHAT_ID={chat}")
-    arquivo.write_text("\n".join(linhas) + "\n", encoding="utf-8")
-    os.environ["TELEGRAM_CHAT_ID"] = chat
+    chaves.salvar("TELEGRAM_CHAT_ID", chat)
     return chat
+
+
+def testar() -> bool:
+    """Manda uma mensagem de teste agora (mesmo com os avisos desligados neste computador)."""
+    if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("TELEGRAM_CHAT_ID"):
+        return False
+    return _enviar("✅ Canal Dark: os avisos estão funcionando.")
 
 
 if __name__ == "__main__":
@@ -88,11 +91,14 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(encoding="utf-8")
     acao = sys.argv[1] if len(sys.argv) > 1 else ""
     if acao == "descobrir":
-        descobrir_chat()
+        try:
+            descobrir_chat()
+        except chaves.ErroChave as erro:
+            print("Não deu certo:", erro)
+            sys.exit(1)
         print("Pronto: a conversa foi gravada no .env (TELEGRAM_CHAT_ID).")
     elif acao == "testar":
-        os.environ["CANAL_AVISOS"] = "1"
-        ok = avisar("✅ Canal Dark: os avisos estão funcionando.", chave=f"teste-{time.time()}", esperar=True)
+        ok = testar()
         print("Mensagem enviada." if ok else "Não deu certo: confira o token e o TELEGRAM_CHAT_ID no .env.")
         sys.exit(0 if ok else 1)
     else:

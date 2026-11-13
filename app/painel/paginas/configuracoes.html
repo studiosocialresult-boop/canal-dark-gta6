@@ -21,9 +21,21 @@
   <section class="cartao painel-interno">
     <h3>Estado do sistema</h3>
     <div class="estado-sistema" id="sistema"><div class="esqueleto" style="aspect-ratio:auto;height:220px"></div></div>
-    <p class="dica">As chaves ficam só no arquivo <b>.env</b> deste computador. O painel nunca mostra nem guarda o valor delas.</p>
+    <p class="dica">As chaves ficam só no arquivo <b>.env</b> de onde o painel roda. O painel nunca mostra o valor delas.</p>
   </section>
 </div>
+
+<section class="cartao painel-interno" style="margin-top:16px" id="area-chaves">
+  <div>
+    <h3>Chaves e integrações</h3>
+    <p class="dica" style="margin:6px 0 0">Cole cada chave e clique em <b>Salvar</b>. Ela vai direto para o servidor onde este painel roda e passa a valer na hora. Depois de salva, o painel só mostra se está preenchida, nunca o valor. Nunca mande chaves pelo chat.</p>
+  </div>
+  <div id="chaves"><div class="esqueleto" style="aspect-ratio:auto;height:220px"></div></div>
+  <div>
+    <h3 style="font-size:14px">Endereços de retorno (para os cadastros das redes)</h3>
+    <div id="retornos" class="retornos"></div>
+  </div>
+</section>
 {% endblock %}
 
 {% block scripts %}<script src="/estatico/configuracoes.js"></script>{% endblock %}

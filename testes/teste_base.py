@@ -2179,5 +2179,102 @@ class TesteVps(unittest.TestCase):
             self.assertIn("eol: lf", atributo, nome)
 
 
+class TesteChaves(unittest.TestCase):
+    """Area "Chaves e integracoes": grava no .env, nunca devolve o valor, e a publicacao nao apaga as da VPS."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        from fastapi.testclient import TestClient
+        from app import chaves
+        from app.painel import servidor
+        cls.ch = chaves
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(self.pasta.cleanup)
+        self.env = Path(self.pasta.name) / ".env"
+        self.env.write_text("ANTHROPIC_API_KEY=a\n# comentario\n", encoding="utf-8")
+        p = mock.patch.object(self.ch, "_arquivo", return_value=self.env); p.start(); self.addCleanup(p.stop)
+        nomes = [n for n in self.ch.NOMES]
+        guardados = {n: os.environ.get(n) for n in nomes}
+        def restaurar():
+            for n, v in guardados.items():
+                if v is None: os.environ.pop(n, None)
+                else: os.environ[n] = v
+        self.addCleanup(restaurar)
+
+    def test_salvar_troca_limpa_e_apaga(self):
+        self.ch.salvar("YOUTUBE_CLIENT_ID", '  "123-abc.apps.googleusercontent.com" ')
+        self.assertIn("YOUTUBE_CLIENT_ID=123-abc.apps.googleusercontent.com", self.env.read_text(encoding="utf-8"))
+        self.assertEqual(os.environ["YOUTUBE_CLIENT_ID"], "123-abc.apps.googleusercontent.com")
+        self.ch.salvar("YOUTUBE_CLIENT_ID", "outro-valor-1234")
+        self.assertEqual(self.env.read_text(encoding="utf-8").count("YOUTUBE_CLIENT_ID="), 1)
+        self.ch.salvar("YOUTUBE_CLIENT_ID", "")
+        self.assertNotIn("YOUTUBE_CLIENT_ID", self.env.read_text(encoding="utf-8"))
+        self.assertIsNone(os.environ.get("YOUTUBE_CLIENT_ID"))
+        self.assertIn("# comentario", self.env.read_text(encoding="utf-8"))
+
+    def test_recusa_valor_estranho_e_chave_desconhecida(self):
+        with self.assertRaises(self.ch.ErroChave):
+            self.ch.salvar("YOUTUBE_CLIENT_ID", "tem espaco no meio")
+        with self.assertRaises(self.ch.ErroChave):
+            self.ch.salvar("YOUTUBE_CLIENT_ID", "abc\nCANAL_CHAVE_SECRETA=x")
+        with self.assertRaises(self.ch.ErroChave):
+            self.ch.salvar("CANAL_CHAVE_SECRETA", "qualquer-coisa")
+        with self.assertRaises(self.ch.ErroChave):
+            self.ch.salvar("META_APP_ID", "nao-e-numero")
+
+    def test_painel_nunca_devolve_o_valor(self):
+        r = self.cliente.put("/api/chaves", json={"nome": "META_APP_SECRET", "valor": "SEGREDO-NAO-VAZA-123"})
+        self.assertEqual(r.status_code, 200)
+        texto = self.cliente.get("/api/chaves").text
+        self.assertNotIn("SEGREDO-NAO-VAZA-123", texto)
+        estado = {c["nome"]: c["preenchida"] for c in self.cliente.get("/api/chaves").json()["chaves"]}
+        self.assertTrue(estado["META_APP_SECRET"])
+        self.assertIn("/contas/retorno/youtube", texto)
+        self.assertEqual(self.cliente.put("/api/chaves", json={"nome": "X", "valor": "y"}).status_code, 400)
+
+    def test_recusa_pedido_de_outro_site(self):
+        r = self.cliente.put("/api/chaves", json={"nome": "META_APP_SECRET", "valor": "abc12345"},
+                             headers={"Origin": "https://site-malicioso.com"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_publicacao_mantem_as_chaves_da_vps(self):
+        pasta = Path(self.pasta.name)
+        novo, atual = pasta / "novo", pasta / "atual"
+        novo.write_text("ANTHROPIC_API_KEY=nova\nYOUTUBE_CLIENT_ID=\nCANAL_CHAVE_SECRETA=outra\nOUTRA=1\n", encoding="utf-8")
+        atual.write_text("ANTHROPIC_API_KEY=da-vps\nYOUTUBE_CLIENT_ID=id-da-vps\nCANAL_CHAVE_SECRETA=cofre-vps\nVELHA=2\n",
+                         encoding="utf-8")
+        mantidas = self.ch.juntar(novo, atual)
+        valores = self.ch._valores(atual.read_text(encoding="utf-8").splitlines())
+        self.assertEqual(valores["YOUTUBE_CLIENT_ID"], "id-da-vps")
+        self.assertEqual(valores["CANAL_CHAVE_SECRETA"], "cofre-vps")
+        self.assertEqual(valores["ANTHROPIC_API_KEY"], "da-vps")
+        self.assertEqual(valores["OUTRA"], "1")
+        self.assertNotIn("VELHA", valores)
+        self.assertIn("CANAL_CHAVE_SECRETA", mantidas)
+        # primeira publicacao: a VPS ainda nao tem .env
+        (pasta / "vazio").write_text("", encoding="utf-8")
+        primeiro = pasta / "primeiro"
+        self.ch.juntar(novo, primeiro)
+        self.assertIn("ANTHROPIC_API_KEY=nova", primeiro.read_text(encoding="utf-8"))
+
+    def test_telegram_descobrir_salva_a_conversa(self):
+        from app import avisos
+        os.environ["TELEGRAM_BOT_TOKEN"] = "123:abc"
+        resposta = SimpleNamespace(json=lambda: {"ok": True, "result": [{"message": {"chat": {"id": 987654}}}]})
+        with mock.patch("app.avisos.requests.get", return_value=resposta):
+            self.assertEqual(self.cliente.post("/api/chaves/telegram/descobrir").status_code, 200)
+        self.assertIn("TELEGRAM_CHAT_ID=987654", self.env.read_text(encoding="utf-8"))
+        vazio = SimpleNamespace(json=lambda: {"ok": True, "result": []})
+        with mock.patch("app.avisos.requests.get", return_value=vazio):
+            r = self.cliente.post("/api/chaves/telegram/descobrir")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("oi", r.json()["erro"])
+        self.assertTrue(avisos.ligado() or os.getenv("CANAL_AVISOS") != "1")
+
+
 if __name__ == "__main__":
     unittest.main()
