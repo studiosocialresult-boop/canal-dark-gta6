@@ -145,7 +145,8 @@
       ${trabalhando ? `<div style="display:flex;gap:12px;align-items:center"><div class="giro"></div><b>${s.estado === "renderizando" ? "Montando o vídeo…" : "Na fila…"}</b></div>`
         : s.estado === "pronto" ? `${saidas.desatualizado ? `<div class="aviso-caixa">${icone("alerta")}<span>Você mudou o enquadramento depois de gerar. Clique em "Gerar vídeo" para atualizar.</span></div>` : ""}
             <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap"><div class="saida" style="width:200px"><div class="tela"><video src="${s.url}" controls preload="metadata" playsinline></video></div></div>
-              <a class="botao primario" href="${s.url}?baixar=1" download>${icone("baixar")}Baixar vídeo</a></div>`
+              <div style="display:grid;gap:8px"><a class="botao primario" href="${s.url}?baixar=1" download>${icone("baixar")}Baixar vídeo</a>
+              <button class="botao" type="button" id="agendar-ajuste">${icone("calendario")}Agendar</button></div></div>`
         : `<div class="aviso-caixa" style="background:var(--erro-fraco);color:var(--erro)">${icone("alerta")}<span>${esc(s.erro || "Falhou")}</span></div>`}`;
   }
 
@@ -155,6 +156,10 @@
     desenharResultado();
     if (saidas.contagem.aguardando + saidas.contagem.renderizando > 0) relogioSaidas = setTimeout(atualizarSaidas, 2000);
   }
+
+  $("#resultado").addEventListener("click", (e) => {
+    if (e.target.closest("#agendar-ajuste")) Agendar.abrir({ saidas: [saidas.saidas[0].id] });
+  });
 
   $("#gerar").onclick = async () => {
     if (!midia()) { aviso("Escolha um vídeo primeiro.", { tipo: "erro" }); return; }

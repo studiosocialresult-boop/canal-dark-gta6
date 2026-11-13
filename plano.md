@@ -221,11 +221,17 @@ Evitar `max`: custa muito e costuma pensar demais.
 - A descrição de cada post credita a fonte do vídeo original.
 - O agendador aplica a regra contra repetição da Fase 4 e mostra na tela **Agenda** o que vai para cada conta.
 - **Atenção:** cada plataforma exige cadastro de aplicativo de desenvolvedor e aprovação. Isso leva dias — começar os cadastros já na Fase 1.
-- **Travas a confirmar na documentação oficial antes de construir:**
-  - YouTube: vídeos enviados por um app ainda não auditado ficam privados. Pedir a auditoria assim que houver algo funcionando para mostrar.
-  - YouTube: a cota diária gratuita pode não cobrir 10 a 20 envios por dia mais as buscas da Fase 6. Medir e, se preciso, pedir aumento de cota.
-  - YouTube: com o app em "modo teste", o acesso à conta expira a cada 7 dias. Publicar o app para o acesso não cair (necessário para a Fase 7 rodar 7 dias sozinha).
-  - TikTok: sem auditoria do app, os posts saem só como privados, e a aprovação pode demorar ou ser negada. Se não sair, o TikTok fica com postagem manual a partir dos cortes baixados.
+- **Travas conferidas na documentação oficial (13/11/2026):**
+  - YouTube: ~~vídeos de app não auditado ficam privados~~ **não ficam mais** (mudança oficial de 02/11/2026). Envio custa 1 unidade da cota "Video Uploads", limite de **100 envios por dia**: cobre o volume. Com o app do Google em "modo de teste", o acesso expira em 7 dias: **publicar o app** no Google Cloud antes da Fase 7.
+  - Instagram e Facebook: um login da Meta (Facebook Login para Empresas) conecta a Página e o Instagram profissional ligado a ela; token de Página não expira. Instagram: até 100 posts/24 h (a conta informa o limite real), Reels de 3 s a 15 min, até 300 MB. Facebook Reels: **3 a 90 s**, até 30 posts/24 h.
+  - TikTok: sem auditoria, só posta como "Somente eu" e com a conta **privada**; no máximo 5 usuários por dia. As regras exigem que o dono escolha a privacidade (sem padrão), ligue ou não comentários/dueto/costura e confirme cada post, e proíbem marca d'água ou logo no vídeo (atenção aos templates com perfil). Por isso o TikTok **nunca entra no modo automático**. Se a auditoria for negada, fica a postagem manual a partir dos cortes baixados.
+- **Andamento (13/11/2026): construída e testada com as redes simuladas.**
+  - Telas **Contas** (conectar pelo login oficial de cada rede, ritmo por conta, pausar, desconectar) e **Agenda** (por dia, com editar, publicar agora, cancelar, tentar de novo). Botão **Agendar** nos cortes aprovados, nos vídeos dos Templates (espalhando as variações entre as contas) e no Editor.
+  - **Regra contra repetição:** o mesmo conteúdo (`chave_video`, ex.: `corte:12`) nunca vai duas vezes para a mesma conta, com trava no banco; variações de um corte são espalhadas, uma por conta.
+  - Legenda escrita pela IA (Haiku, `prompts/legenda_post.md`) com hashtags e **crédito da fonte** acrescentado pelo sistema. Horários em Brasília, espaçados pelo ritmo de cada conta dentro da janela (Configurações). Falhas temporárias tentam de novo (5 min, 20 min, 1 h); acesso vencido marca a conta para reconectar.
+  - Acessos das contas guardados **criptografados** (chave `CANAL_CHAVE_SECRETA` criada sozinha no `.env`; levar para a VPS junto).
+  - Código: `app/postagem/` (`youtube`, `meta`, `tiktok`, `agendador`, `contas`, `cofre`, `legenda`, `redes`) e `app/painel/api_postagem.py`.
+  - **Falta para o "pronto":** cadastrar os apps de desenvolvedor (YouTube, Meta, TikTok), colocar as chaves no `.env`, conectar as contas e ver um corte aprovado sair no horário marcado. Endereços de retorno para cadastrar: `http://127.0.0.1:8000/contas/retorno/youtube`, `/meta` e `/tiktok` (na VPS, o endereço https dela).
 
 ### Fase 6 — Busca diária
 - Todo dia às 6h (horário de São Paulo): buscar vídeos de GTA 6 em alta no Brasil e nos EUA pela YouTube Data API, mais os novos vídeos dos canais e perfis da lista monitorada.

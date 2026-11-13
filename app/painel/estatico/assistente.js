@@ -173,6 +173,7 @@
       case "todas-frases": await acao(() => api(`/api/templates/${ID}/frases`, { metodo: "PUT", corpo: { selecionada: dado.valor === "1" } }), true); break;
       case "gerar-lote": await gerarLote(); break;
       case "baixar-todos": baixarTodos(); break;
+      case "agendar-saidas": Agendar.abrir({ saidas: saidas.saidas.filter((s) => s.url).map((s) => s.id), distribuir: true }); break;
     }
   });
 
@@ -478,7 +479,8 @@
             ${s.url ? `<a class="botao pequeno primario" href="${s.url}?baixar=1" download>${icone("baixar")}Baixar</a>` : `<span class="selo ${s.estado === "falhou" ? "erro" : ""}">${s.estado === "renderizando" ? "Montando…" : s.estado === "falhou" ? "Falhou" : "Na fila"}</span>`}</div></div>`).join("")}</div>` : "";
     caixa.innerHTML = `<div style="display:grid;gap:18px">${topo}
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${botao}
-        ${c.pronto ? `<a class="botao" href="/api/templates/${ID}/saidas.zip" download>${icone("baixar")}Baixar tudo (.zip · ${c.pronto})</a>` : ""}
+        ${c.pronto ? `<a class="botao" href="/api/templates/${ID}/saidas.zip" download>${icone("baixar")}Baixar tudo (.zip · ${c.pronto})</a>
+          <button class="botao primario" data-acao="agendar-saidas">${icone("calendario")}Agendar ${c.pronto} vídeo${c.pronto > 1 ? "s" : ""}</button>` : ""}
         ${!c.total && r.total === 0 ? '<span class="dica">Escolha vídeos e frases nos passos anteriores.</span>' : ""}</div>${grade}</div>`;
   }
 

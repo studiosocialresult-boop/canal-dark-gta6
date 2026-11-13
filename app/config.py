@@ -57,6 +57,11 @@ PRECOS_USD_POR_MILHAO = {
     "claude-haiku-5-5": (0.10, 0.50),
 }
 
+# Postagem (Fase 5).
+URL_PAINEL = os.getenv("CANAL_URL_PAINEL", "http://127.0.0.1:8000")   # base dos enderecos de retorno do login
+FUSO = os.getenv("CANAL_FUSO", "America/Sao_Paulo")                 # horarios da agenda sao mostrados neste fuso
+VERSAO_META = "v27.0"                                                # versao da API da Meta (Instagram e Facebook)
+
 # Valores padrao das configuracoes por usuario. O banco guarda so o que o usuario mudou.
 CONFIG_PADRAO = {
     "cortes_min": 3,
@@ -64,6 +69,12 @@ CONFIG_PADRAO = {
     "duracao_min_s": 20,
     "duracao_max_s": 75,
     "nota_minima_narracao": 70,
+    # Postagem
+    "posts_por_dia": 4,            # ritmo padrao de cada conta nova
+    "janela_inicio": 9,            # primeira hora do dia em que posta (fuso local)
+    "janela_fim": 22,              # ultima hora (exclusiva)
+    "modo_automatico": 0,          # 1: aprova e agenda sozinho os cortes com nota alta (desligado por padrao)
+    "nota_minima_automatico": 80,  # nota minima para o modo automatico aprovar um corte
 }
 
 

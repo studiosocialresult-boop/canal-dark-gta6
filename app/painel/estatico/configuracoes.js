@@ -6,12 +6,20 @@
   let originais = {}, atuais = {};
 
   function desenharAjustes(valores) {
-    $("#ajustes").innerHTML = valores.map((v) => `
+    $("#ajustes").innerHTML = valores.map((v) => v.minimo === 0 && v.maximo === 1 ? `
+      <div class="ajuste">
+        <label class="interruptor"><input type="checkbox" data-chave="${v.chave}" ${v.valor ? "checked" : ""}>${esc(v.nome)}</label>
+        <small>${esc(v.ajuda)}</small>
+      </div>` : `
       <div class="ajuste">
         <div class="ajuste-topo"><b>${esc(v.nome)}</b><output id="saida-${v.chave}">${v.valor}${esc(v.unidade)}</output></div>
         <input type="range" data-chave="${v.chave}" min="${v.minimo}" max="${v.maximo}" value="${v.valor}" step="1">
         <small>${esc(v.ajuda)}</small>
       </div>`).join("");
+    document.querySelectorAll("#ajustes input[type=checkbox]").forEach((c) => c.addEventListener("change", () => {
+      atuais[c.dataset.chave] = c.checked ? 1 : 0;
+      $("#salvar").disabled = JSON.stringify(atuais) === JSON.stringify(originais);
+    }));
     document.querySelectorAll("input[type=range]").forEach((r) => r.addEventListener("input", () => {
       atuais[r.dataset.chave] = Number(r.value);
       const unidade = valores.find((v) => v.chave === r.dataset.chave).unidade;

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block titulo %}Contas{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-plug"/></svg></div>
+  <div>
+    <h1>Contas</h1>
+    <p>Conecte YouTube, Instagram, Facebook e TikTok para publicar daqui. Os acessos ficam guardados criptografados neste computador e você pode desconectar quando quiser.</p>
+  </div>
+</section>
+
+<div id="mensagem-contas"></div>
+<section class="servicos" id="servicos"></section>
+
+<section class="cartao painel-interno" style="margin-top:16px">
+  <h3>Contas conectadas</h3>
+  <div id="lista-contas"><div class="esqueleto" style="aspect-ratio:auto;height:120px"></div></div>
+</section>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/contas.js"></script>{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block titulo %}Agenda{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-calendario"/></svg></div>
+  <div>
+    <h1>Agenda</h1>
+    <p>O que vai para cada conta e quando (horário de Brasília). Para agendar, aprove um corte e clique em <b>Agendar</b>, ou use os vídeos gerados nos Templates.</p>
+  </div>
+</section>
+
+<section class="numeros">
+  <div class="cartao numero"><div class="brilho" style="background:var(--acento)"></div><small>Agendadas</small><strong id="n-agendadas">–</strong><em>nos próximos dias</em></div>
+  <div class="cartao numero"><div class="brilho" style="background:var(--ok)"></div><small>Publicadas</small><strong id="n-publicadas">–</strong><em>nos últimos 3 dias</em></div>
+  <div class="cartao numero"><div class="brilho" style="background:var(--erro)"></div><small>Com problema</small><strong id="n-falhas">–</strong><em>precisam de atenção</em></div>
+</section>
+
+<section class="barra-ferramentas">
+  <div class="abas" id="filtro-estado">
+    <button class="aba ativa" data-estado="proximas">Próximas</button>
+    <button class="aba" data-estado="publicada">Publicadas</button>
+    <button class="aba" data-estado="problema">Com problema</button>
+    <button class="aba" data-estado="todas">Todas</button>
+  </div>
+  <div class="filtros"><select class="campo-select" id="filtro-conta"><option value="">Todas as contas</option></select></div>
+</section>
+
+<section id="dias"></section>
+
+<div class="fundo-modal" id="modal-editar">
+  <div class="modal estreito" style="position:relative">
+    <form class="modal-simples" id="form-editar">
+      <h2>Editar publicação</h2>
+      <label class="rotulo-campo">Título<input class="campo" id="ed-titulo" maxlength="100" required></label>
+      <label class="rotulo-campo">Legenda<textarea class="campo" id="ed-legenda" style="min-height:160px"></textarea></label>
+      <label class="rotulo-campo">Horário<input class="campo" type="datetime-local" id="ed-horario"></label>
+      <div class="erro-texto" id="ed-erro"></div>
+      <div class="modal-acoes"><button class="botao" type="button" id="ed-cancelar">Fechar</button><button class="botao primario" type="submit">Salvar</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/agenda.js"></script>{% endblock %}

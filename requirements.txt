@@ -6,6 +6,8 @@ python-dotenv
 fastapi
 jinja2
 pillow
+cryptography
+tzdata
 uvicorn
 apscheduler
 requests

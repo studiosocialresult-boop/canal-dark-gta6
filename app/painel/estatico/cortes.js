@@ -248,6 +248,8 @@
     $("#corte-baixar").href = c.midia || "#";
     $("#corte-baixar").setAttribute("download", `corte_${c.id}.mp4`);
     $("#corte-aprovar").disabled = c.estado === "aprovado";
+    $("#corte-aprovar").hidden = c.estado === "aprovado";
+    $("#corte-agendar").hidden = c.estado !== "aprovado";
     $("#corte-descartar").disabled = c.estado === "descartado";
 
     const narrando = Painel.fila().some((i) => i.tipo === "narrar" && i.alvo === String(c.id) && ["aguardando", "processando"].includes(i.estado));
@@ -289,6 +291,13 @@
   }
 
   $("#corte-fechar").onclick = fechar;
+  $("#corte-agendar").onclick = () => { const id = estado.aberto; fechar(); Agendar.abrir({ cortes: [id] }); };
+  $("#massa-agendar").onclick = () => {
+    const aprovados = [...estado.selecionados].filter((id) => estado.cortes.find((c) => c.id === id)?.estado === "aprovado");
+    if (!aprovados.length) { aviso("Só cortes aprovados podem ser agendados. Aprove primeiro.", { tipo: "erro" }); return; }
+    if (aprovados.length < estado.selecionados.size) aviso(`${estado.selecionados.size - aprovados.length} corte(s) não aprovado(s) ficaram de fora.`);
+    Agendar.abrir({ cortes: aprovados });
+  };
   modal.addEventListener("mousedown", (e) => { if (e.target === modal) fechar(); });
   $("#corte-aprovar").onclick = () => decidir("aprovado");
   $("#corte-descartar").onclick = () => decidir("descartado");

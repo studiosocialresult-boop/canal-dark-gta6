@@ -13,6 +13,8 @@ from types import SimpleNamespace
 # Os testes usam uma pasta de dados temporaria, para nunca mexer no banco de verdade.
 _PASTA_TEMPORARIA = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
 os.environ["CANAL_PASTA_DADOS"] = _PASTA_TEMPORARIA.name
+from cryptography.fernet import Fernet  # noqa: E402
+os.environ["CANAL_CHAVE_SECRETA"] = Fernet.generate_key().decode()
 
 from app import banco, config, ia  # noqa: E402
 from app.cerebro import escolher  # noqa: E402
@@ -1345,6 +1347,582 @@ class TesteParteB(unittest.TestCase):
             self.assertEqual(z.namelist(), ["Meu_Lote_01.mp4", "Meu_Lote_02.mp4"])
             self.assertIsNone(z.testzip())
         self.assertEqual(self.cliente.get("/api/templates/999999/saidas.zip").status_code, 404)
+
+
+# ======================================================================
+# Fase 5: postagem (redes simuladas: nada sai do computador)
+# ======================================================================
+
+class Resposta:
+    """Imita uma resposta do `requests`."""
+
+    def __init__(self, status=200, corpo=None, headers=None):
+        self.status_code, self._corpo, self.headers = status, corpo, headers or {}
+        self.text = json.dumps(corpo) if corpo is not None else ""
+
+    def json(self):
+        if self._corpo is None:
+            raise ValueError("sem json")
+        return self._corpo
+
+
+class RedeFalsa:
+    """Troca o `requests.request` dos conectores. Cada regra: (metodo, trecho da url) -> resposta ou funcao."""
+
+    def __init__(self, regras):
+        self.regras, self.chamadas = list(regras), []
+
+    def __call__(self, metodo, url, **kwargs):
+        dados = kwargs.get("data")
+        if hasattr(dados, "read"):
+            kwargs["data"] = dados.read()
+        self.chamadas.append((metodo, url, kwargs))
+        for i, (m, trecho, resposta) in enumerate(self.regras):
+            if m == metodo and trecho in url:
+                if isinstance(resposta, list):            # sequencia: usa e tira a primeira
+                    proxima = resposta.pop(0) if len(resposta) > 1 else resposta[0]
+                    resposta = proxima
+                if callable(resposta) and not isinstance(resposta, Resposta):
+                    resposta = resposta(metodo, url, kwargs)
+                if isinstance(resposta, Exception):
+                    raise resposta
+                return resposta
+        raise AssertionError(f"Chamada inesperada: {metodo} {url}")
+
+    def ativar(self):
+        from app.postagem import redes
+        return mock.patch.object(redes.requests, "request", side_effect=self)
+
+
+def arquivo_de(tamanho: int) -> Path:
+    pasta = Path(tempfile.mkdtemp(prefix="post_"))
+    arquivo = pasta / "video.mp4"
+    arquivo.write_bytes(os.urandom(tamanho))
+    return arquivo
+
+
+class TesteCofre(unittest.TestCase):
+    def test_guarda_e_abre(self):
+        from app.postagem import cofre
+        texto = cofre.guardar({"token": "segredo-123"})
+        self.assertNotIn("segredo-123", texto)
+        self.assertEqual(cofre.abrir(texto), {"token": "segredo-123"})
+
+    def test_chave_errada_nao_abre(self):
+        from cryptography.fernet import Fernet
+        from app.postagem import cofre
+        texto = cofre.guardar({"a": 1})
+        with mock.patch.dict(os.environ, {"CANAL_CHAVE_SECRETA": Fernet.generate_key().decode()}):
+            with self.assertRaises(cofre.ErroCofre):
+                cofre.abrir(texto)
+
+    def test_cria_a_chave_no_env_se_faltar(self):
+        from app.postagem import cofre
+        pasta = Path(tempfile.mkdtemp(prefix="env_"))
+        (pasta / ".env").write_text("ANTHROPIC_API_KEY=x", encoding="utf-8")
+        ambiente = {k: v for k, v in os.environ.items() if k != "CANAL_CHAVE_SECRETA"}
+        with mock.patch.dict(os.environ, ambiente, clear=True), mock.patch.object(config, "RAIZ", pasta):
+            texto = cofre.guardar({"b": 2})
+            self.assertEqual(cofre.abrir(texto), {"b": 2})
+        conteudo = (pasta / ".env").read_text(encoding="utf-8")
+        self.assertIn("ANTHROPIC_API_KEY=x\n", conteudo)            # o que ja existia continua
+        self.assertIn("CANAL_CHAVE_SECRETA=", conteudo)
+
+
+    def test_rele_a_chave_criada_por_outro_processo(self):
+        """O painel aberto nao pode criar uma segunda chave se um comando no terminal ja criou a primeira."""
+        from cryptography.fernet import Fernet
+        from app.postagem import cofre
+        pasta = Path(tempfile.mkdtemp(prefix="env2_"))
+        chave = Fernet.generate_key().decode()
+        (pasta / ".env").write_text(f"CANAL_CHAVE_SECRETA={chave}\n", encoding="utf-8")
+        ambiente = {k: v for k, v in os.environ.items() if k != "CANAL_CHAVE_SECRETA"}
+        with mock.patch.dict(os.environ, ambiente, clear=True), mock.patch.object(config, "RAIZ", pasta):
+            texto = cofre.guardar({"c": 3})
+        self.assertEqual(Fernet(chave.encode()).decrypt(texto.encode()), b'{"c": 3}')
+        self.assertEqual((pasta / ".env").read_text(encoding="utf-8").count("CANAL_CHAVE_SECRETA="), 1)
+
+
+class TesteYouTube(unittest.TestCase):
+    def setUp(self):
+        from app.postagem import youtube
+        self.yt = youtube
+        self.ambiente = mock.patch.dict(os.environ, {"YOUTUBE_CLIENT_ID": "id", "YOUTUBE_CLIENT_SECRET": "seg"})
+        self.ambiente.start(); self.addCleanup(self.ambiente.stop)
+        self.credenciais = __import__("app.postagem.redes", fromlist=["Credenciais"]).Credenciais(
+            {"access_token": "velho", "refresh_token": "renova"})
+
+    def test_envio_em_partes_e_resposta(self):
+        arquivo = arquivo_de(5000)
+        recebido = bytearray()
+
+        def put(_m, _u, kw):
+            recebido.extend(kw["data"])
+            fim = int(kw["headers"]["Content-Range"].split("-")[1].split("/")[0])
+            return Resposta(201, {"id": "abc123"}) if fim == 4999 else Resposta(308, headers={"Range": f"bytes=0-{fim}"})
+        rede = RedeFalsa([("POST", "oauth2.googleapis.com/token", Resposta(200, {"access_token": "novo"})),
+                          ("POST", "upload/youtube/v3/videos", Resposta(200, {}, {"Location": "https://upload/sessao"})),
+                          ("PUT", "https://upload/sessao", put)])
+        with rede.ativar(), mock.patch.object(self.yt, "PEDACO", 2048):
+            r = self.yt.publicar(self.credenciais, arquivo, "Título", "Legenda #Shorts")
+        self.assertEqual((r.id_externo, r.url), ("abc123", "https://www.youtube.com/shorts/abc123"))
+        self.assertEqual(bytes(recebido), arquivo.read_bytes())                    # tudo chegou, em ordem
+        sessao = next(c for c in rede.chamadas if "upload/youtube" in c[1])
+        self.assertEqual(sessao[2]["params"]["uploadType"], "resumable")
+        self.assertEqual(sessao[2]["headers"]["X-Upload-Content-Length"], "5000")
+        self.assertEqual(sessao[2]["json"]["status"]["privacyStatus"], "public")
+        self.assertTrue(self.credenciais.mudou)                                  # token novo para guardar
+
+    def test_retoma_de_onde_parou(self):
+        import requests
+        arquivo = arquivo_de(3000)
+        recebido = []
+
+        def put(_m, _u, kw):
+            faixa = kw["headers"]["Content-Range"]
+            if faixa == "bytes */3000":
+                return Resposta(308, headers={"Range": "bytes=0-1023"})       # so 1024 bytes chegaram
+            recebido.append(faixa)
+            if len(recebido) == 1:
+                raise requests.ConnectionError("caiu")
+            return Resposta(201, {"id": "v1"})
+        rede = RedeFalsa([("POST", "oauth2", Resposta(200, {"access_token": "t"})),
+                          ("POST", "upload/youtube", Resposta(200, {}, {"Location": "https://upload/s"})),
+                          ("PUT", "https://upload/s", put)])
+        with rede.ativar():
+            self.assertEqual(self.yt.publicar(self.credenciais, arquivo, "T", "L").id_externo, "v1")
+        self.assertEqual(recebido, ["bytes 0-2999/3000", "bytes 1024-2999/3000"])
+
+    def test_acesso_vencido_pede_reconectar_e_cota_e_temporaria(self):
+        from app.postagem.redes import ErroPostagem
+        arquivo = arquivo_de(100)
+        with RedeFalsa([("POST", "oauth2", Resposta(400, {"error": "invalid_grant"}))]).ativar():
+            with self.assertRaises(ErroPostagem) as erro:
+                self.yt.publicar(self.credenciais, arquivo, "T", "L")
+        self.assertTrue(erro.exception.reconectar)
+        cota = Resposta(403, {"error": {"errors": [{"reason": "quotaExceeded"}], "message": "quota"}})
+        with RedeFalsa([("POST", "oauth2", Resposta(200, {"access_token": "t"})), ("POST", "upload/youtube", cota)]).ativar():
+            with self.assertRaises(ErroPostagem) as erro:
+                self.yt.publicar(self.credenciais, arquivo, "T", "L")
+        self.assertTrue(erro.exception.temporario)
+
+    def test_login_monta_o_endereco_e_guarda_o_canal(self):
+        from urllib.parse import parse_qs, urlparse
+        url = self.yt.endereco_de_login("http://127.0.0.1:8000/contas/retorno/youtube", "ESTADO")
+        q = parse_qs(urlparse(url).query)
+        self.assertEqual((q["access_type"], q["state"], q["prompt"]), (["offline"], ["ESTADO"], ["consent"]))
+        self.assertIn("youtube.upload", q["scope"][0])
+        rede = RedeFalsa([("POST", "oauth2", Resposta(200, {"access_token": "a", "refresh_token": "r"})),
+                          ("GET", "youtube/v3/channels", Resposta(200, {"items": [{"id": "UC1", "snippet": {"title": "Meu Canal"}}]}))])
+        with rede.ativar():
+            contas = self.yt.concluir_login("CODIGO", "http://retorno")
+        self.assertEqual((contas[0]["id_externo"], contas[0]["nome"]), ("UC1", "Meu Canal"))
+        self.assertEqual(contas[0]["credenciais"]["refresh_token"], "r")
+
+
+class TesteMeta(unittest.TestCase):
+    def setUp(self):
+        from app.postagem import meta
+        from app.postagem.redes import Credenciais
+        self.meta, self.Credenciais = meta, Credenciais
+        self.addCleanup(mock.patch.object(meta, "_dormir", lambda s: None).stop)
+        mock.patch.object(meta, "_dormir", lambda s: None).start()
+        ambiente = mock.patch.dict(os.environ, {"META_APP_ID": "app", "META_APP_SECRET": "seg"})
+        ambiente.start(); self.addCleanup(ambiente.stop)
+
+    def test_reel_do_instagram(self):
+        arquivo = arquivo_de(4000)
+        rede = RedeFalsa([
+            ("POST", "/IG1/media_publish", Resposta(200, {"id": "M9"})),
+            ("POST", "/IG1/media", Resposta(200, {"id": "C1", "uri": "https://rupload.facebook.com/ig-api-upload/v27.0/C1"})),
+            ("POST", "rupload.facebook.com/ig-api-upload", Resposta(200, {"success": True})),
+            ("GET", "/C1", [Resposta(200, {"status_code": "IN_PROGRESS"}), Resposta(200, {"status_code": "FINISHED"})]),
+            ("GET", "/M9", Resposta(200, {"permalink": "https://www.instagram.com/reel/XYZ/"})),
+        ])
+        with rede.ativar():
+            r = self.meta.publicar_instagram(self.Credenciais({"ig_id": "IG1", "page_token": "PT"}), arquivo, "T", "Legenda")
+        self.assertEqual((r.id_externo, r.url), ("M9", "https://www.instagram.com/reel/XYZ/"))
+        criar = rede.chamadas[0]
+        self.assertEqual((criar[2]["data"]["media_type"], criar[2]["data"]["upload_type"]), ("REELS", "resumable"))
+        envio = rede.chamadas[1]
+        self.assertEqual(envio[2]["headers"]["Authorization"], "OAuth PT")
+        self.assertEqual((envio[2]["headers"]["offset"], envio[2]["headers"]["file_size"]), ("0", "4000"))
+
+    def test_reel_do_facebook_e_token_invalido(self):
+        from app.postagem.redes import ErroPostagem
+        arquivo = arquivo_de(1000)
+        fases = []
+
+        def reels(_m, _u, kw):
+            fases.append(kw["data"]["upload_phase"])
+            return Resposta(200, {"video_id": "V1", "upload_url": "https://rupload.facebook.com/video-upload/V1"}) \
+                if kw["data"]["upload_phase"] == "start" else Resposta(200, {"success": True})
+        rede = RedeFalsa([("POST", "/P1/video_reels", reels),
+                          ("POST", "rupload.facebook.com/video-upload", Resposta(200, {"success": True})),
+                          ("GET", "/V1", Resposta(200, {"status": {"video_status": "ready"}}))])
+        with rede.ativar():
+            r = self.meta.publicar_facebook(self.Credenciais({"page_id": "P1", "page_token": "PT"}), arquivo, "T", "L")
+        self.assertEqual(fases, ["start", "finish"])
+        self.assertEqual(r.url, "https://www.facebook.com/reel/V1")
+        finalizar = [c for c in rede.chamadas if c[0] == "POST" and "video_reels" in c[1]][-1]
+        self.assertEqual(finalizar[2]["data"]["video_state"], "PUBLISHED")
+        vencido = Resposta(400, {"error": {"code": 190, "message": "expired"}})
+        with RedeFalsa([("POST", "/P1/video_reels", vencido)]).ativar():
+            with self.assertRaises(ErroPostagem) as erro:
+                self.meta.publicar_facebook(self.Credenciais({"page_id": "P1", "page_token": "PT"}), arquivo, "T", "L")
+        self.assertTrue(erro.exception.reconectar)
+
+    def test_login_traz_pagina_e_instagram(self):
+        rede = RedeFalsa([
+            ("GET", "oauth/access_token", [Resposta(200, {"access_token": "curto"}), Resposta(200, {"access_token": "longo"})]),
+            ("GET", "/me/accounts", Resposta(200, {"data": [{"id": "P1", "name": "Minha Página", "access_token": "PT",
+                                                             "instagram_business_account": {"id": "IG1", "username": "minhapagina"}}]})),
+        ])
+        with rede.ativar():
+            contas = self.meta.concluir_login("CODIGO", "http://retorno")
+        self.assertEqual([(c["rede"], c["id_externo"], c["nome"]) for c in contas],
+                         [("facebook", "P1", "Minha Página"), ("instagram", "IG1", "@minhapagina")])
+        self.assertEqual(contas[1]["credenciais"], {"ig_id": "IG1", "page_id": "P1", "page_token": "PT"})
+
+
+class TesteTikTok(unittest.TestCase):
+    def setUp(self):
+        from app.postagem import tiktok
+        from app.postagem.redes import Credenciais
+        self.tt, self.Credenciais = tiktok, Credenciais
+        p = mock.patch.object(tiktok, "_dormir", lambda s: None); p.start(); self.addCleanup(p.stop)
+        ambiente = mock.patch.dict(os.environ, {"TIKTOK_CLIENT_KEY": "k", "TIKTOK_CLIENT_SECRET": "s"})
+        ambiente.start(); self.addCleanup(ambiente.stop)
+
+    def credenciais(self, expira=None):
+        import time as relogio
+        return self.Credenciais({"access_token": "A", "refresh_token": "R", "expira_em": expira or relogio.time() + 3600})
+
+    def test_plano_de_pedacos_segue_a_documentacao(self):
+        mb = self.tt.MB
+        self.assertEqual(self.tt.plano_de_pedacos(4 * mb), (4 * mb, 1))             # menor que 5 MB: inteiro
+        tamanho, quantidade = self.tt.plano_de_pedacos(50_000_123)
+        self.assertEqual(quantidade, 50_000_123 // tamanho)
+        ultimo = 50_000_123 - (quantidade - 1) * tamanho
+        self.assertTrue(5 * mb <= tamanho <= 64 * mb and ultimo <= 128 * mb)
+
+    def test_posta_com_a_privacidade_escolhida(self):
+        arquivo = arquivo_de(3000)
+        rede = RedeFalsa([
+            ("POST", "creator_info/query", Resposta(200, {"data": {"privacy_level_options": ["SELF_ONLY", "FOLLOWER_OF_CREATOR"],
+                                                                   "creator_nickname": "eu"}, "error": {"code": "ok"}})),
+            ("POST", "video/init", Resposta(200, {"data": {"publish_id": "PUB1", "upload_url": "https://up.tiktok/x"}, "error": {"code": "ok"}})),
+            ("PUT", "https://up.tiktok/x", Resposta(201)),
+            ("POST", "status/fetch", [Resposta(200, {"data": {"status": "PROCESSING_UPLOAD"}}),
+                                      Resposta(200, {"data": {"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": []}})]),
+        ])
+        with rede.ativar():
+            r = self.tt.publicar(self.credenciais(), arquivo, "T", "Legenda", {"privacidade": "SELF_ONLY", "comentarios": True})
+        self.assertEqual(r.id_externo, "PUB1")
+        iniciar = next(c for c in rede.chamadas if "video/init" in c[1])[2]["json"]
+        self.assertEqual(iniciar["post_info"]["privacy_level"], "SELF_ONLY")
+        self.assertFalse(iniciar["post_info"]["disable_comment"])
+        self.assertTrue(iniciar["post_info"]["disable_duet"])                       # desligado por padrao
+        self.assertEqual(iniciar["source_info"], {"source": "FILE_UPLOAD", "video_size": 3000, "chunk_size": 3000, "total_chunk_count": 1})
+        envio = next(c for c in rede.chamadas if c[0] == "PUT")[2]
+        self.assertEqual(envio["headers"]["Content-Range"], "bytes 0-2999/3000")
+
+    def test_recusa_sem_privacidade_ou_com_privacidade_nao_permitida(self):
+        from app.postagem.redes import ErroPostagem
+        arquivo = arquivo_de(100)
+        with self.assertRaises(ErroPostagem):
+            self.tt.publicar(self.credenciais(), arquivo, "T", "L", {})
+        rede = RedeFalsa([("POST", "creator_info", Resposta(200, {"data": {"privacy_level_options": ["SELF_ONLY"]}, "error": {"code": "ok"}}))])
+        with rede.ativar(), self.assertRaises(ErroPostagem):
+            self.tt.publicar(self.credenciais(), arquivo, "T", "L", {"privacidade": "PUBLIC_TO_EVERYONE"})
+
+    def test_renova_o_token_e_guarda_o_novo(self):
+        credenciais = self.credenciais(expira=1)
+        rede = RedeFalsa([("POST", "oauth/token", Resposta(200, {"access_token": "A2", "refresh_token": "R2", "expires_in": 7200})),
+                          ("POST", "creator_info", Resposta(200, {"data": {"privacy_level_options": ["SELF_ONLY"]}, "error": {"code": "ok"}}))])
+        with rede.ativar():
+            self.tt.info_do_criador(credenciais)
+        self.assertTrue(credenciais.mudou)
+        self.assertEqual((credenciais["access_token"], credenciais["refresh_token"]), ("A2", "R2"))   # o de renovacao muda
+
+
+class TesteAgendador(unittest.TestCase):
+    """Agenda: horarios, aprovacao, regra contra repeticao, publicacao e novas tentativas."""
+    VIDEO = Path(__file__).parent / "exemplo_zoo.mp4"
+
+    @classmethod
+    def setUpClass(cls):
+        from app.postagem import agendador, contas
+        cls.ag, cls.contas = agendador, contas
+
+    def setUp(self):
+        import shutil, sqlite3
+        banco.criar_tabelas()
+        with sqlite3.connect(config.ARQUIVO_BANCO) as c:
+            c.execute("DELETE FROM publicacoes"); c.execute("DELETE FROM contas")
+        self.video_id = banco.registrar_video(1, "youtube", f"agenda{len(self._testMethodName):05d}", "https://www.youtube.com/watch?v=origem00001")
+        banco.atualizar_video(self.video_id, titulo="Vídeo de origem", canal="Canal Fonte")
+        config.garantir_pastas()
+        destino = config.PASTA_CORTES / "agenda" / "corte.mp4"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        if not destino.exists():
+            shutil.copy(self.VIDEO, destino)
+        self.arquivo = config.caminho_relativo(destino)
+        self.corte = self.novo_corte("aprovado")
+        self.textos = {"titulo": "Título do post", "descricao": "Descrição.", "hashtags": ["GTA6", "Rockstar", "games"]}
+        p = mock.patch.object(self.ag.legenda, "escrever", return_value=self.textos); p.start(); self.addCleanup(p.stop)
+        self.yt = self.contas.salvar_conta(1, "youtube", "UC1", "Canal YT", None, {"refresh_token": "r"}, 4)
+        self.fb = self.contas.salvar_conta(1, "facebook", "P1", "Página", None, {"page_id": "P1", "page_token": "t"}, 4)
+
+    def novo_corte(self, estado):
+        corte_id = banco.registrar_corte(1, self.video_id, CorteProposto(1, 2, 0.0, 19.0, 85, "Motivo", "Corte de teste", "original"))
+        banco.atualizar_corte(corte_id, estado=estado, caminho_arquivo=self.arquivo)
+        return corte_id
+
+    def test_horarios_espacados_na_janela_e_arredondados(self):
+        from datetime import date
+        horarios = self.ag.horarios_do_dia(date(2026, 11, 14), 4, 9, 22)
+        locais = [h.astimezone(self.ag._fuso()) for h in horarios]
+        self.assertEqual(len(locais), 4)
+        self.assertTrue(all(9 <= h.hour < 22 and h.minute % 5 == 0 for h in locais))
+        self.assertEqual(sorted(locais), locais)
+
+    def test_proximos_horarios_pulam_ocupados_e_passado(self):
+        conta = self.contas.ler_conta(self.yt)
+        primeiros = self.ag.proximos_horarios(conta, 3, 1)
+        self.assertEqual(len(primeiros), 3)
+        self.assertTrue(all(h > self.ag.agora() for h in primeiros))
+        self.contas.criar_publicacao(1, self.yt, origem="corte", corte_id=self.corte, saida_id=None, arquivo=self.arquivo,
+                                     chave_video="x", titulo="t", legenda="l", opcoes={}, agendada_para=self.ag.texto(primeiros[0]))
+        depois = self.ag.proximos_horarios(conta, 1, 1)
+        self.assertEqual(depois[0], primeiros[1])
+
+    def test_so_corte_aprovado_e_agendado(self):
+        nao_aprovado = self.novo_corte("renderizado")
+        with self.assertRaises(self.ag.ErroAgenda):
+            self.ag.item_de_corte(nao_aprovado, 1)
+
+    def test_mesmo_corte_nunca_duas_vezes_na_mesma_conta(self):
+        item = self.ag.item_de_corte(self.corte, 1)
+        primeira = self.ag.agendar(1, [item], [self.yt, self.fb])
+        self.assertEqual(len(primeira["criadas"]), 2)
+        segunda = self.ag.agendar(1, [item], [self.yt])
+        self.assertEqual(segunda["criadas"], [])
+        self.assertIn("já foi", segunda["puladas"][0]["motivo"])
+        import sqlite3
+        with self.assertRaises(sqlite3.IntegrityError):                       # e o banco tambem trava
+            self.contas.criar_publicacao(1, self.yt, origem="corte", corte_id=self.corte, saida_id=None, arquivo=self.arquivo,
+                                         chave_video=f"corte:{self.corte}", titulo="t", legenda="l", opcoes={},
+                                         agendada_para="2030-01-01 12:00:00")
+
+    def test_variacoes_de_um_corte_sao_espalhadas_entre_contas(self):
+        item = self.ag.item_de_corte(self.corte, 1)
+        variacoes = [dict(item, frase=f"Frase {i}") for i in range(3)]          # 3 variacoes do MESMO corte
+        r = self.ag.agendar(1, variacoes, [self.yt, self.fb], distribuir=True)
+        self.assertEqual(sorted(c["conta"] for c in r["criadas"]), ["Canal YT", "Página"])   # 1 por conta
+        self.assertEqual(len(r["puladas"]), 1)                                  # a terceira nao repete em ninguem
+
+    def test_legenda_tem_credito_e_hashtags(self):
+        self.ag.agendar(1, [self.ag.item_de_corte(self.corte, 1)], [self.yt])
+        p = self.contas.listar_publicacoes(1)[0]
+        self.assertIn("Fonte: Vídeo de origem — Canal Fonte (https://www.youtube.com/watch?v=origem00001)", p["legenda"])
+        self.assertIn("#GTA6", p["legenda"])
+        self.assertIn("#Shorts", p["legenda"])
+
+    def test_facebook_recusa_video_mais_longo_que_90s(self):
+        import subprocess
+        longo = config.PASTA_CORTES / "agenda" / "longo.mp4"
+        if not longo.exists():
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=160x284:d=95",
+                            "-c:v", "libx264", "-preset", "ultrafast", str(longo)], check=True)
+        corte = self.novo_corte("aprovado")
+        banco.atualizar_corte(corte, caminho_arquivo=config.caminho_relativo(longo))
+        r = self.ag.agendar(1, [self.ag.item_de_corte(corte, 1)], [self.yt, self.fb])
+        self.assertEqual([c["rede"] for c in r["criadas"]], ["youtube"])
+        self.assertIn("3 a 90", r["puladas"][0]["motivo"])
+
+    def test_tiktok_exige_privacidade_e_confirmacao(self):
+        tt = self.contas.salvar_conta(1, "tiktok", "OPEN1", "Meu TikTok", None, {"access_token": "a"}, 2)
+        item = self.ag.item_de_corte(self.corte, 1)
+        with self.assertRaises(self.ag.ErroAgenda):
+            self.ag.agendar(1, [item], [tt])
+        r = self.ag.agendar(1, [item], [tt], opcoes_por_rede={"tiktok": {"privacidade": "SELF_ONLY", "confirmado": True}})
+        self.assertEqual(len(r["criadas"]), 1)
+
+    def test_horario_no_passado_e_recusado(self):
+        from datetime import timedelta
+        with self.assertRaises(self.ag.ErroAgenda):
+            self.ag.agendar(1, [self.ag.item_de_corte(self.corte, 1)], [self.yt], horario=self.ag.agora() - timedelta(hours=1))
+
+    def _agendar_agora(self):
+        from datetime import timedelta
+        self.ag.agendar(1, [self.ag.item_de_corte(self.corte, 1)], [self.yt], horario=self.ag.agora() + timedelta(minutes=2))
+        return self.contas.listar_publicacoes(1)[0]["id"], self.ag.agora() + timedelta(minutes=3)
+
+    def test_publica_na_hora_e_guarda_o_link(self):
+        from app.postagem.redes import Resultado
+        publicacao, depois = self._agendar_agora()
+        publicar = mock.Mock(return_value=Resultado("abc", "https://www.youtube.com/shorts/abc"))
+        with mock.patch.dict(self.ag.CONECTORES, {"youtube": publicar}):
+            self.assertEqual(self.ag.publicar_vencidas(self.ag.agora()), 0)     # ainda nao e a hora
+            self.assertEqual(self.ag.publicar_vencidas(depois), 1)
+        p = self.contas.ler_publicacao(publicacao)
+        self.assertEqual((p["estado"], p["url"]), ("publicada", "https://www.youtube.com/shorts/abc"))
+        argumentos = publicar.call_args.args
+        self.assertTrue(str(argumentos[1]).endswith("corte.mp4"))
+        self.assertEqual(argumentos[2], "Título do post")
+
+    def test_falha_temporaria_tenta_de_novo_e_depois_desiste(self):
+        from datetime import timedelta
+        from app.postagem.redes import ErroPostagem
+        publicacao, depois = self._agendar_agora()
+        falha = mock.Mock(side_effect=ErroPostagem("fora do ar", temporario=True))
+        momento = depois
+        with mock.patch.dict(self.ag.CONECTORES, {"youtube": falha}):
+            for _ in range(self.ag.MAX_TENTATIVAS + 1):
+                self.ag.publicar_vencidas(momento)
+                momento += timedelta(hours=2)
+        p = self.contas.ler_publicacao(publicacao)
+        self.assertEqual(p["estado"], "falhou")
+        self.assertEqual(falha.call_count, self.ag.MAX_TENTATIVAS + 1)
+
+    def test_acesso_vencido_marca_a_conta(self):
+        from app.postagem.redes import ErroPostagem
+        publicacao, depois = self._agendar_agora()
+        with mock.patch.dict(self.ag.CONECTORES, {"youtube": mock.Mock(side_effect=ErroPostagem("venceu", reconectar=True))}):
+            self.ag.publicar_vencidas(depois)
+        self.assertEqual(self.contas.ler_conta(self.yt)["estado"], "expirada")
+        self.assertEqual(self.contas.ler_publicacao(publicacao)["estado"], "agendada")   # espera reconectar
+        with mock.patch.dict(self.ag.CONECTORES, {"youtube": mock.Mock()}) as _:
+            self.assertEqual(self.ag.publicar_vencidas(depois), 0)               # conta expirada: nao tenta
+
+    def test_token_renovado_e_guardado(self):
+        from app.postagem.redes import Resultado
+        publicacao, depois = self._agendar_agora()
+
+        def publica(credenciais, *_):
+            credenciais.atualizar(access_token="novo")
+            return Resultado("x")
+        with mock.patch.dict(self.ag.CONECTORES, {"youtube": publica}):
+            self.ag.publicar_vencidas(depois)
+        self.assertEqual(self.contas.credenciais_da_conta(self.yt)["access_token"], "novo")
+
+    def test_limite_diario_adia_sem_gastar_tentativa(self):
+        publicacao, depois = self._agendar_agora()
+        with mock.patch.dict(self.ag.REDES["youtube"], {"limite_diario": 0}), \
+             mock.patch.dict(self.ag.CONECTORES, {"youtube": mock.Mock()}) as conectores:
+            self.ag.publicar_vencidas(depois)
+            conectores["youtube"].assert_not_called()
+        p = self.contas.ler_publicacao(publicacao)
+        self.assertEqual((p["estado"], p["tentativas"]), ("agendada", 0))
+        self.assertIsNotNone(p["proxima_tentativa"])
+
+    def test_modo_automatico_desligado_e_ligado(self):
+        bom = self.novo_corte("renderizado")
+        self.assertEqual(self.ag.rodar_modo_automatico(1), 0)
+        self.assertEqual(banco.ler_corte(bom)["estado"], "renderizado")
+        tt = self.contas.salvar_conta(1, "tiktok", "OPEN2", "TikTok", None, {"access_token": "a"}, 2)
+        banco.salvar_config(1, "modo_automatico", 1)
+        self.addCleanup(banco.salvar_config, 1, "modo_automatico", 0)
+        self.assertEqual(self.ag.rodar_modo_automatico(1), 2)                    # YouTube + Facebook, nunca TikTok
+        self.assertEqual(banco.ler_corte(bom)["estado"], "aprovado")
+        self.assertFalse(any(p["conta_id"] == tt for p in self.contas.listar_publicacoes(1)))
+
+
+class TestePainelPostagem(unittest.TestCase):
+    """Rotas de Contas e Agenda no painel."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        from fastapi.testclient import TestClient
+        from app.painel import api_postagem, servidor
+        from app.postagem import contas
+        cls.api, cls.contas = api_postagem, contas
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        import sqlite3
+        banco.criar_tabelas()
+        with sqlite3.connect(config.ARQUIVO_BANCO) as c:
+            c.execute("DELETE FROM publicacoes"); c.execute("DELETE FROM contas")
+
+    def test_paginas_e_lista_sem_segredos(self):
+        self.assertEqual(self.cliente.get("/contas").status_code, 200)
+        self.assertEqual(self.cliente.get("/agenda").status_code, 200)
+        self.contas.salvar_conta(1, "youtube", "UC9", "Canal", None, {"refresh_token": "SEGREDO-NAO-VAZA"}, 4)
+        texto = self.cliente.get("/api/contas").text
+        self.assertNotIn("SEGREDO-NAO-VAZA", texto)
+        self.assertNotIn("credenciais", texto)
+
+    def test_conectar_sem_app_cadastrado_avisa(self):
+        with mock.patch.dict(os.environ, {"YOUTUBE_CLIENT_ID": "", "YOUTUBE_CLIENT_SECRET": ""}):
+            r = self.cliente.get("/contas/conectar/youtube", follow_redirects=False)
+        self.assertTrue(r.headers["location"].startswith("/contas?erro="))
+
+    def test_login_completo_e_protecao_do_retorno(self):
+        with mock.patch.dict(os.environ, {"YOUTUBE_CLIENT_ID": "id", "YOUTUBE_CLIENT_SECRET": "s"}):
+            r = self.cliente.get("/contas/conectar/youtube", follow_redirects=False)
+        destino = r.headers["location"]
+        self.assertTrue(destino.startswith("https://accounts.google.com/"))
+        from urllib.parse import parse_qs, urlparse
+        estado = parse_qs(urlparse(destino).query)["state"][0]
+        # retorno com estado inventado: recusado
+        r = self.cliente.get("/contas/retorno/youtube?code=X&state=inventado", follow_redirects=False)
+        self.assertIn("erro=", r.headers["location"])
+        nova = [{"rede": "youtube", "id_externo": "UC5", "nome": "Canal Novo", "credenciais": {"refresh_token": "r"}}]
+        with mock.patch.object(self.api.youtube, "concluir_login", return_value=nova):
+            r = self.cliente.get(f"/contas/retorno/youtube?code=X&state={estado}", follow_redirects=False)
+            self.assertEqual(r.headers["location"], "/contas?conectadas=1")
+            # o mesmo estado nao vale duas vezes
+            r = self.cliente.get(f"/contas/retorno/youtube?code=X&state={estado}", follow_redirects=False)
+            self.assertIn("erro=", r.headers["location"])
+        self.assertEqual([c["nome"] for c in self.contas.listar_contas(1)], ["Canal Novo"])
+
+    def test_ajustar_conta(self):
+        conta = self.contas.salvar_conta(1, "youtube", "UC7", "Canal", None, {"refresh_token": "r"}, 4)
+        self.assertEqual(self.cliente.put(f"/api/contas/{conta}", json={"posts_por_dia": 8, "ativa": False}).status_code, 200)
+        dados = self.contas.ler_conta(conta)
+        self.assertEqual((dados["posts_por_dia"], dados["ativa"]), (8, 0))
+        self.assertEqual(self.cliente.put(f"/api/contas/{conta}", json={"posts_por_dia": 99}).status_code, 400)
+        self.assertEqual(self.cliente.delete(f"/api/contas/{conta}").status_code, 200)
+        self.assertEqual(self.cliente.put("/api/contas/99999", json={"ativa": True}).status_code, 404)
+
+    def test_configuracao_da_janela_e_do_modo_automatico(self):
+        put = lambda **c: self.cliente.put("/api/configuracoes", json=c)   # noqa: E731
+        self.assertEqual(put(janela_inicio=23, janela_fim=8).status_code, 400)
+        self.assertEqual(put(modo_automatico=1).status_code, 200)
+        self.assertEqual(banco.ler_config(1, "modo_automatico"), 1)
+        self.assertEqual(put(modo_automatico=0).status_code, 200)
+        self.assertEqual(put(modo_automatico=2).status_code, 400)
+
+    def test_agendar_editar_e_cancelar_pelo_painel(self):
+        import shutil
+        video_id = banco.registrar_video(1, "youtube", "painelpost1", "https://www.youtube.com/watch?v=painelpost1")
+        destino = config.PASTA_CORTES / "agenda" / "painel.mp4"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(Path(__file__).parent / "exemplo_zoo.mp4", destino)
+        corte = banco.registrar_corte(1, video_id, CorteProposto(1, 2, 0.0, 19.0, 80, "m", "Corte", "original"))
+        banco.atualizar_corte(corte, estado="aprovado", caminho_arquivo=config.caminho_relativo(destino))
+        conta = self.contas.salvar_conta(1, "youtube", "UC8", "Canal", None, {"refresh_token": "r"}, 4)
+        textos = {"titulo": "Meu título", "descricao": "Descrição curta.", "hashtags": ["GTA6", "games", "Rockstar"]}
+        r = self.cliente.post("/api/agendar", json={"cortes": [corte], "contas": [conta], "textos": textos})
+        self.assertEqual(len(r.json()["criadas"]), 1, r.text)
+        self.assertEqual(self.cliente.post("/api/agendar", json={"cortes": [corte], "contas": [conta], "textos": {"titulo": ""}}).status_code, 400)
+        agenda = self.cliente.get("/api/agenda").json()["publicacoes"]
+        self.assertEqual(agenda[0]["titulo"], "Meu título")
+        pid = agenda[0]["id"]
+        self.assertEqual(self.cliente.put(f"/api/publicacoes/{pid}", json={"horario": "2020-01-01T10:00"}).status_code, 400)
+        self.assertEqual(self.cliente.put(f"/api/publicacoes/{pid}", json={"legenda": "Nova legenda"}).status_code, 200)
+        self.assertEqual(self.cliente.post(f"/api/publicacoes/{pid}/agora").status_code, 200)
+        self.assertEqual(self.cliente.post(f"/api/publicacoes/{pid}/cancelar").status_code, 200)
+        self.assertEqual(self.cliente.post(f"/api/publicacoes/{pid}/cancelar").status_code, 409)
+        self.assertEqual(self.cliente.get(f"/api/publicacoes/{pid}/miniatura.jpg").status_code, 200)
+        nao_aprovado = banco.registrar_corte(1, video_id, CorteProposto(3, 4, 0.0, 19.0, 80, "m", "Outro", "original"))
+        banco.atualizar_corte(nao_aprovado, caminho_arquivo=config.caminho_relativo(destino))
+        r = self.cliente.post("/api/agendar", json={"cortes": [nao_aprovado], "contas": [conta]})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("aprovados", r.json()["erro"])
 
 
 if __name__ == "__main__":

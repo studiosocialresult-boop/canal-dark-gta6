@@ -19,7 +19,8 @@ from fastapi.templating import Jinja2Templates
 
 from app import banco, config
 from app.download import baixar
-from app.painel import api_perfis, api_templates, fila
+from app.painel import api_perfis, api_postagem, api_templates, fila
+from app.postagem import agendador
 
 PASTA = Path(__file__).resolve().parent
 USUARIO = config.USUARIO_PADRAO
@@ -39,9 +40,9 @@ MENU = [
      "descricao": "Analise um perfil ou canal e traga os posts mais vistos direto para os cortes."},
     {"id": "editor", "nome": "Editor", "icone": "lapis", "fase": 4, "pronto": True,
      "descricao": "Ajuste rápido de um vídeo para o formato vertical."},
-    {"id": "agenda", "nome": "Agenda", "icone": "calendario", "fase": 5,
+    {"id": "agenda", "nome": "Agenda", "icone": "calendario", "fase": 5, "pronto": True,
      "descricao": "O calendário do que está agendado em cada conta, rede por rede."},
-    {"id": "contas", "nome": "Contas", "icone": "plug", "fase": 5,
+    {"id": "contas", "nome": "Contas", "icone": "plug", "fase": 5, "pronto": True,
      "descricao": "Conecte YouTube, Instagram, TikTok e Facebook para publicar daqui."},
 ]
 
@@ -53,6 +54,13 @@ CONFIGURACOES = [
     ("duracao_max_s", "Duração máxima do corte", "Cortes mais longos que isso são recusados.", 15, 180, "s"),
     ("nota_minima_narracao", "Nota mínima para narrar sozinho",
      "Só cortes com nota igual ou maior ganham narração automática (a voz custa dinheiro).", 0, 100, ""),
+    ("posts_por_dia", "Posts por dia (contas novas)", "Ritmo inicial de cada conta conectada. Dá para mudar conta por conta.", 1, 24, ""),
+    ("janela_inicio", "Começa a postar às", "Primeira hora do dia em que a agenda coloca posts (horário de Brasília).", 0, 23, "h"),
+    ("janela_fim", "Para de postar às", "Depois desta hora a agenda não coloca posts.", 1, 24, "h"),
+    ("modo_automatico", "Modo 100% automático",
+     "Desligado: só vai para as redes o que você aprovar. Ligado: cortes com nota alta são aprovados e agendados sozinhos "
+     "(menos no TikTok, que exige sua confirmação em cada post).", 0, 1, ""),
+    ("nota_minima_automatico", "Nota mínima no modo automático", "Só cortes com esta nota ou mais são aprovados sozinhos.", 50, 100, ""),
 ]
 
 
@@ -60,13 +68,16 @@ def criar_app() -> FastAPI:
     config.garantir_pastas()
     banco.criar_tabelas()
     trabalhador = fila.Trabalhador()
+    publicador = agendador.Publicador()
 
     @asynccontextmanager
     async def ciclo_de_vida(_app):
         if os.getenv("CANAL_SEM_TRABALHADOR") != "1":
             trabalhador.start()
+            publicador.start()
         yield
         trabalhador.parar()
+        publicador.parar()
 
     app = FastAPI(title="Canal Dark", docs_url=None, redoc_url=None, lifespan=ciclo_de_vida)
     app.mount("/estatico", StaticFiles(directory=PASTA / "estatico"), name="estatico")
@@ -91,6 +102,7 @@ def criar_app() -> FastAPI:
 
     api_templates.registrar(app, paginas, contexto)
     api_perfis.registrar(app, paginas, contexto)
+    api_postagem.registrar(app, paginas, contexto)
 
     @app.get("/{tela}")
     def pagina_futura(request: Request, tela: str):
@@ -213,6 +225,8 @@ def criar_app() -> FastAPI:
             raise HTTPException(400, "O mínimo de cortes não pode passar do máximo.")
         if atual["duracao_min_s"] >= atual["duracao_max_s"]:
             raise HTTPException(400, "A duração mínima precisa ser menor que a máxima.")
+        if atual["janela_inicio"] >= atual["janela_fim"]:
+            raise HTTPException(400, "A hora de começar precisa ser antes da hora de parar.")
         for chave, valor in novos.items():
             banco.salvar_config(USUARIO, chave, valor)
         return {"ok": True}

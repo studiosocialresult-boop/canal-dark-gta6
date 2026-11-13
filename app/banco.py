@@ -211,6 +211,54 @@ CREATE TABLE IF NOT EXISTS template_saidas (
     UNIQUE (template_id, midia_id, frase_id)
 );
 
+-- Contas das redes sociais conectadas. As credenciais (tokens de acesso) ficam criptografadas.
+-- rede: youtube, instagram, facebook ou tiktok. estado: conectada, expirada (precisa conectar de novo) ou erro.
+CREATE TABLE IF NOT EXISTS contas (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    rede TEXT NOT NULL,
+    id_externo TEXT NOT NULL,
+    nome TEXT NOT NULL,
+    foto TEXT,
+    credenciais TEXT NOT NULL,
+    ativa INTEGER NOT NULL DEFAULT 1,
+    posts_por_dia INTEGER NOT NULL DEFAULT 4,
+    estado TEXT NOT NULL DEFAULT 'conectada',
+    erro TEXT,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    atualizado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (usuario_id, rede, id_externo)
+);
+
+-- Publicacoes: um video em uma conta, num horario. Horarios em UTC ('AAAA-MM-DD HH:MM:SS').
+-- chave_video identifica o conteudo de origem (ex.: "corte:12"): o mesmo corte nunca vai duas vezes
+-- para a mesma conta, mesmo com frase ou layout diferente (indice unico abaixo).
+-- estado: agendada -> publicando -> publicada (ou falhou, ou cancelada)
+CREATE TABLE IF NOT EXISTS publicacoes (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    conta_id INTEGER NOT NULL REFERENCES contas(id) ON DELETE CASCADE,
+    origem TEXT NOT NULL,
+    corte_id INTEGER,
+    saida_id INTEGER,
+    arquivo TEXT NOT NULL,
+    chave_video TEXT NOT NULL,
+    titulo TEXT NOT NULL,
+    legenda TEXT NOT NULL,
+    opcoes TEXT NOT NULL DEFAULT '{}',
+    agendada_para TEXT NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'agendada',
+    tentativas INTEGER NOT NULL DEFAULT 0,
+    proxima_tentativa TEXT,
+    id_externo TEXT,
+    url TEXT,
+    erro TEXT,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    publicado_em TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS publicacao_unica_por_conta
+    ON publicacoes (conta_id, chave_video) WHERE estado != 'cancelada';
+
 -- Cada chamada paga a um servico de IA, para medir o custo por corte.
 CREATE TABLE IF NOT EXISTS uso_api (
     id INTEGER PRIMARY KEY,
