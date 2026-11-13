@@ -155,6 +155,7 @@ Evitar `max`: custa muito e costuma pensar demais.
 - Todo corte guarda no banco a **fonte**: link, canal e título do vídeo original.
 - Enquadramento vertical inicial: vídeo centralizado com fundo desfocado. Detecção de câmera do streamer fica para depois.
 - **Teste antecipado de VPS:** assim que o download funcionar no computador, repetir o mesmo download numa VPS barata para saber se o YouTube bloqueia. O resultado define como será a Fase 7.
+  - **Resultado (13/11/2026, Oracle Cloud São Paulo):** sem login, o YouTube bloqueia ("confirme que não é robô"). Com o `cookies.txt` da conta secundária, baixou normalmente, inclusive vídeo com restrição de idade (11 min em 8 s; 56 min em 50 s). Precisa do Deno e do `yt-dlp-ejs` instalados. Os cookies vencem se o perfil do navegador continuar em uso: exportar de um perfil separado do Chrome e fechar a janela logo depois.
 - **Pronto quando:** 3 links diferentes geram cortes que começam e terminam em frases completas, com legenda sincronizada.
 - **Modelo:** **Fable 5.2** para desenhar o prompt do cérebro e a arquitetura do pipeline; **Opus 5.5** para o ffmpeg; Sonnet 5.5 no restante.
 
@@ -241,7 +242,7 @@ A assinatura do Claude (usada no Claude Code) e a API da Anthropic (usada pelo a
 6. **Duração dos cortes:** faixa padrão em segundos para cada rede.
 7. **Identidade do canal:** nome, cores e fonte para os templates.
 8. **Nota mínima para narrar:** começa em 70; ajustar depois de ver os primeiros cortes e o custo real da Fase 2.
-9. **Onde roda o download:** depende do teste de VPS da Fase 1 (na própria VPS ou no computador de casa).
+9. **Onde roda o download:** ~~depende do teste de VPS da Fase 1~~ **Decidido: na própria VPS, com os cookies da conta secundária** (teste de 13/11/2026). O painel deve avisar quando os cookies vencerem.
 
 ## 9. Fora do escopo
 
