@@ -4,6 +4,7 @@ faster-whisper
 anthropic
 python-dotenv
 fastapi
+jinja2
 uvicorn
 apscheduler
 requests

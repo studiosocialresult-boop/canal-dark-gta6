@@ -23,8 +23,14 @@ from app.transcricao import transcrever
 log = config.criar_log("pipeline")
 
 
-def processar_link(url: str, usuario_id: int = config.USUARIO_PADRAO) -> list[Path]:
-    """Processa um video do comeco ao fim. Devolve os arquivos dos cortes gerados."""
+def processar_link(url: str, usuario_id: int = config.USUARIO_PADRAO,
+                   progresso=None) -> list[Path]:
+    """Processa um video do comeco ao fim. Devolve os arquivos dos cortes gerados.
+
+    progresso: funcao opcional que recebe um texto curto a cada etapa (o painel usa para
+    mostrar o andamento).
+    """
+    avisar = progresso or (lambda _texto: None)
     config.garantir_pastas()
     banco.criar_tabelas()
 
@@ -42,12 +48,17 @@ def processar_link(url: str, usuario_id: int = config.USUARIO_PADRAO) -> list[Pa
         usuario_id, plataforma, id_externo, url)
 
     try:
+        avisar("Baixando o vídeo")
         video = _etapa_download(video_id, url)
+        avisar("Ouvindo e transcrevendo (a etapa mais demorada)")
         transcricao = _etapa_transcricao(video_id, video)
+        avisar("A IA está escolhendo os melhores momentos")
         _etapa_cerebro(video_id, usuario_id, video, transcricao)
+        avisar("Escrevendo as narrações")
         _etapa_roteiro(video_id, usuario_id)
+        avisar("Gravando as vozes")
         _etapa_voz(video_id)
-        arquivos = _etapa_edicao(video_id, usuario_id, video, transcricao)
+        arquivos = _etapa_edicao(video_id, usuario_id, video, transcricao, avisar)
     except Exception as erro:
         log.error("O video %d falhou: %s", video_id, erro)
         banco.atualizar_video(video_id, estado="falhou", erro=str(erro)[:500])
@@ -136,11 +147,13 @@ def _etapa_voz(video_id: int) -> None:
 
 
 def _etapa_edicao(video_id: int, usuario_id: int, video: VideoBaixado,
-                  transcricao: Transcricao) -> list[Path]:
+                  transcricao: Transcricao, avisar=None) -> list[Path]:
     arquivos: list[Path] = []
     pendentes = [c for c in banco.cortes_do_video(video_id) if c["estado"] in ("proposto", "falhou")]
     for numero, linha in enumerate(pendentes, start=1):
         log.info("Edicao: montando corte %d de %d (%s)...", numero, len(pendentes), linha["titulo"])
+        if avisar:
+            avisar(f"Montando o corte {numero} de {len(pendentes)}")
         try:
             arquivos.append(_renderizar(linha, usuario_id, video, transcricao))
         except Exception as erro:
@@ -178,6 +191,17 @@ def _renderizar(linha, usuario_id: int, video: VideoBaixado, transcricao: Transc
         linha["id"], estado="renderizado", erro=None,
         caminho_arquivo=config.caminho_relativo(destino))
     return destino
+
+
+def narrar_e_renderizar(corte_id: int, progresso=None) -> Path:
+    """Escreve o roteiro, grava a voz e refaz o mp4 de um corte. Usado pelo botao "narrar"."""
+    avisar = progresso or (lambda _texto: None)
+    avisar("Escrevendo a narração")
+    roteiro.roteirizar_corte(corte_id)
+    avisar("Gravando a voz")
+    voz.narrar_corte(corte_id)
+    avisar("Montando o vídeo com a narração")
+    return renderizar_corte(corte_id)
 
 
 def renderizar_corte(corte_id: int) -> Path:

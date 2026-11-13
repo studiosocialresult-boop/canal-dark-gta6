@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block titulo %}{{ item.nome }}{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-{{ item.icone }}"/></svg></div>
+  <div><h1>{{ item.nome }}</h1><p>{{ item.descricao }}</p></div>
+  <div class="acoes"><span class="selo acento">Chega na Fase {{ item.fase }}</span></div>
+</section>
+<section class="cartao em-breve" style="margin-top:16px">
+  <div class="arte"><svg class="i"><use href="#i-{{ item.icone }}"/></svg></div>
+  <h2>Esta tela ainda está sendo construída</h2>
+  <p>{{ item.descricao }} Ela entra na <b>Fase {{ item.fase }}</b> do plano. Enquanto isso, o fluxo principal já funciona em <a href="/cortes">Cortes</a>.</p>
+</section>
+{% endblock %}

@@ -81,6 +81,23 @@ CREATE TABLE IF NOT EXISTS narracoes (
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Fila de trabalho do painel: um item por vez e processado, na ordem de chegada.
+-- tipo: "link" (processar um video) ou "narrar" (gerar narracao de um corte; alvo = id do corte).
+-- estado: aguardando -> processando -> pronto (ou falhou)
+CREATE TABLE IF NOT EXISTS fila (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    tipo TEXT NOT NULL CHECK (tipo IN ('link', 'narrar')),
+    alvo TEXT NOT NULL,
+    rotulo TEXT NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'aguardando',
+    progresso TEXT,
+    resultado TEXT,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    iniciado_em TEXT,
+    terminado_em TEXT
+);
+
 -- Cada chamada paga a um servico de IA, para medir o custo por corte.
 CREATE TABLE IF NOT EXISTS uso_api (
     id INTEGER PRIMARY KEY,
@@ -103,6 +120,7 @@ CAMPOS_VIDEO = {
 }
 CAMPOS_CORTE = {"estado", "caminho_arquivo", "erro"}
 CAMPOS_NARRACAO = {"caminho_audio", "estado", "erro"}
+CAMPOS_FILA = {"estado", "progresso", "resultado", "iniciado_em", "terminado_em"}
 
 
 def conectar() -> sqlite3.Connection:
@@ -235,6 +253,86 @@ def ler_narracao(corte_id: int):
 
 def atualizar_narracao(narracao_id: int, **campos) -> None:
     _atualizar("narracoes", CAMPOS_NARRACAO, narracao_id, campos)
+
+
+# ---------- painel: lista de cortes e numeros do dia ----------
+
+def listar_cortes(usuario_id: int) -> list:
+    """Todos os cortes do usuario, do mais novo para o mais velho, com a fonte e a narracao."""
+    with closing(conectar()) as conexao:
+        return conexao.execute(
+            "SELECT c.*, v.titulo AS video_titulo, v.canal AS video_canal, v.url AS video_url, "
+            "v.plataforma AS video_plataforma, n.estado AS narracao_estado, "
+            "COALESCE((SELECT SUM(u.custo_usd) FROM uso_api u WHERE u.video_id = c.video_id), 0) "
+            "  / (SELECT COUNT(*) FROM cortes c2 WHERE c2.video_id = c.video_id) AS custo_usd "
+            "FROM cortes c JOIN videos v ON v.id = c.video_id "
+            "LEFT JOIN narracoes n ON n.corte_id = c.id "
+            "WHERE c.usuario_id = ? ORDER BY c.id DESC", (usuario_id,)).fetchall()
+
+
+def numeros_do_painel(usuario_id: int) -> dict:
+    """Contadores da tela Cortes: totais por estado e gasto com IA."""
+    with closing(conectar()) as conexao:
+        estados = {l["estado"]: l["total"] for l in conexao.execute(
+            "SELECT estado, COUNT(*) AS total FROM cortes WHERE usuario_id = ? GROUP BY estado",
+            (usuario_id,))}
+        hoje = conexao.execute(
+            "SELECT COUNT(*) AS total FROM cortes WHERE usuario_id = ? AND date(criado_em) = date('now')",
+            (usuario_id,)).fetchone()["total"]
+        gasto = conexao.execute(
+            "SELECT COALESCE(SUM(custo_usd), 0) AS total FROM uso_api WHERE usuario_id = ?",
+            (usuario_id,)).fetchone()["total"]
+        gasto_hoje = conexao.execute(
+            "SELECT COALESCE(SUM(custo_usd), 0) AS total FROM uso_api "
+            "WHERE usuario_id = ? AND date(criado_em) = date('now')", (usuario_id,)).fetchone()["total"]
+        videos = conexao.execute(
+            "SELECT COUNT(*) AS total FROM videos WHERE usuario_id = ? AND estado = 'pronto'",
+            (usuario_id,)).fetchone()["total"]
+    return {"estados": estados, "cortes_hoje": hoje, "gasto_usd": gasto,
+            "gasto_hoje_usd": gasto_hoje, "videos_prontos": videos}
+
+
+# ---------- fila de trabalho ----------
+
+def enfileirar(usuario_id: int, tipo: str, alvo: str, rotulo: str) -> int:
+    with closing(conectar()) as conexao, conexao:
+        return conexao.execute(
+            "INSERT INTO fila (usuario_id, tipo, alvo, rotulo) VALUES (?, ?, ?, ?)",
+            (usuario_id, tipo, alvo, rotulo)).lastrowid
+
+
+def item_na_fila(usuario_id: int, tipo: str, alvo: str):
+    """Devolve o item ainda pendente (aguardando ou processando) para o mesmo alvo, se houver."""
+    with closing(conectar()) as conexao:
+        return conexao.execute(
+            "SELECT * FROM fila WHERE usuario_id = ? AND tipo = ? AND alvo = ? "
+            "AND estado IN ('aguardando', 'processando')", (usuario_id, tipo, alvo)).fetchone()
+
+
+def proximo_da_fila():
+    with closing(conectar()) as conexao:
+        return conexao.execute(
+            "SELECT * FROM fila WHERE estado = 'aguardando' ORDER BY id LIMIT 1").fetchone()
+
+
+def listar_fila(usuario_id: int, limite: int = 12) -> list:
+    """Itens ativos primeiro, depois os mais recentes ja terminados."""
+    with closing(conectar()) as conexao:
+        return conexao.execute(
+            "SELECT * FROM fila WHERE usuario_id = ? ORDER BY "
+            "CASE estado WHEN 'processando' THEN 0 WHEN 'aguardando' THEN 1 ELSE 2 END, id DESC LIMIT ?",
+            (usuario_id, limite)).fetchall()
+
+
+def atualizar_fila(item_id: int, **campos) -> None:
+    _atualizar("fila", CAMPOS_FILA, item_id, campos)
+
+
+def retomar_fila() -> None:
+    """Ao ligar o painel, o que estava sendo processado volta para a fila (tudo e retomavel)."""
+    with closing(conectar()) as conexao, conexao:
+        conexao.execute("UPDATE fila SET estado = 'aguardando', progresso = NULL "
+                        "WHERE estado = 'processando'")
 
 
 # ---------- gasto com IA ----------

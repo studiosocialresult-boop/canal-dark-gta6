@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block titulo %}Configurações{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-ajustes"/></svg></div>
+  <div>
+    <h1>Configurações</h1>
+    <p>Ajuste o ritmo dos cortes e confira se tudo o que o sistema precisa está pronto neste computador.</p>
+  </div>
+  <div class="acoes"><button class="botao primario" id="salvar" disabled>Salvar alterações</button></div>
+</section>
+
+<div class="colunas">
+  <section class="cartao painel-interno">
+    <h3>Como a IA escolhe os cortes</h3>
+    <div id="ajustes"><div class="esqueleto" style="aspect-ratio:auto;height:220px"></div></div>
+    <p class="dica">As mudanças valem para os próximos vídeos. Os cortes que já existem não mudam.</p>
+  </section>
+
+  <section class="cartao painel-interno">
+    <h3>Estado do sistema</h3>
+    <div class="estado-sistema" id="sistema"><div class="esqueleto" style="aspect-ratio:auto;height:220px"></div></div>
+    <p class="dica">As chaves ficam só no arquivo <b>.env</b> deste computador. O painel nunca mostra nem guarda o valor delas.</p>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/configuracoes.js"></script>{% endblock %}

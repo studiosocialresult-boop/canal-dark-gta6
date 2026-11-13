@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block titulo %}Cortes{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-tesoura"/></svg></div>
+  <div>
+    <h1>Cortes</h1>
+    <p>Os melhores momentos que a IA tirou dos seus vídeos. Assista, aprove os bons e descarte o resto — só o que você aprovar vai para a postagem.</p>
+  </div>
+  <div class="acoes">
+    <button class="botao" id="botao-selecionar" title="Selecionar vários cortes"><svg class="i"><use href="#i-check"/></svg>Selecionar</button>
+    <button class="botao primario" id="botao-novo"><svg class="i"><use href="#i-mais"/></svg>Novo corte <kbd style="margin-left:2px;background:rgba(255,255,255,.2);border-color:transparent;color:#fff">N</kbd></button>
+  </div>
+</section>
+
+<section class="numeros" id="numeros">
+  <div class="cartao numero"><div class="brilho" style="background:var(--acento)"></div><small>Para revisar</small><strong id="n-revisar">–</strong><em>cortes esperando você</em></div>
+  <div class="cartao numero"><div class="brilho" style="background:var(--ok)"></div><small>Aprovados</small><strong id="n-aprovados">–</strong><em>prontos para postar</em></div>
+  <div class="cartao numero"><div class="brilho" style="background:var(--acento-2)"></div><small>Criados hoje</small><strong id="n-hoje">–</strong><em id="n-meta">meta: 10 a 20 por dia</em></div>
+  <div class="cartao numero"><div class="brilho" style="background:var(--aviso)"></div><small>Custo por corte</small><strong id="n-custo">–</strong><em id="n-custo-ajuda">média de IA e voz</em></div>
+</section>
+
+<section class="barra-ferramentas">
+  <div class="abas" id="abas" role="tablist">
+    <button class="aba ativa" data-aba="revisar" role="tab">Para revisar <span class="n" id="aba-revisar">0</span></button>
+    <button class="aba" data-aba="aprovado" role="tab">Aprovados <span class="n" id="aba-aprovado">0</span></button>
+    <button class="aba" data-aba="descartado" role="tab">Descartados <span class="n" id="aba-descartado">0</span></button>
+    <button class="aba" data-aba="todos" role="tab">Todos <span class="n" id="aba-todos">0</span></button>
+  </div>
+  <div class="filtros">
+    <button class="chip" data-modo="narrado"><svg class="i" style="width:14px;height:14px;vertical-align:-2px"><use href="#i-voz"/></svg> Narrado</button>
+    <button class="chip" data-modo="original">Áudio original</button>
+    <select class="campo-select" id="ordem" aria-label="Ordenar">
+      <option value="novos">Mais recentes</option>
+      <option value="nota">Maior nota</option>
+      <option value="curtos">Mais curtos</option>
+    </select>
+  </div>
+</section>
+
+<section class="grade" id="grade"></section>
+
+<div class="barra-massa" id="barra-massa">
+  <b id="massa-texto">0 selecionados</b>
+  <button class="botao ok pequeno" id="massa-aprovar"><svg class="i"><use href="#i-check"/></svg>Aprovar</button>
+  <button class="botao perigo pequeno" id="massa-descartar" style="background:transparent;color:#ff8a8e"><svg class="i"><use href="#i-x"/></svg>Descartar</button>
+  <button class="botao fantasma pequeno" id="massa-limpar">Limpar</button>
+</div>
+
+<!-- Revisão de um corte -->
+<div class="fundo-modal" id="modal-corte">
+  <div class="modal" style="position:relative">
+    <button class="botao-icone fechar" id="corte-fechar" aria-label="Fechar"><svg class="i"><use href="#i-x"/></svg></button>
+    <div class="modal-video"><video id="player" controls playsinline preload="metadata"></video></div>
+    <div class="modal-corpo">
+      <div class="modal-navegacao">
+        <span id="corte-posicao"></span>
+        <div class="atalhos">
+          <span><kbd>A</kbd> aprovar</span><span><kbd>D</kbd> descartar</span><span><kbd>←</kbd><kbd>→</kbd> navegar</span><span><kbd>Esc</kbd> fechar</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap" id="corte-selos"></div>
+      <h2 id="corte-titulo"></h2>
+      <div class="linha-nota">
+        <div class="nota grande" id="corte-nota"><span></span></div>
+        <div class="textos"><b id="corte-nota-texto"></b><small>nota da IA para chance de prender e ser compartilhado</small></div>
+      </div>
+      <div class="bloco"><h4>Por que a IA escolheu</h4><p id="corte-motivo"></p></div>
+      <div class="bloco" id="corte-fonte-bloco">
+        <h4>Fonte (para dar crédito)</h4>
+        <div class="linha"><span id="corte-fonte" style="flex:1;min-width:0"></span>
+          <button class="botao pequeno" id="corte-credito"><svg class="i"><use href="#i-copiar"/></svg>Copiar crédito</button>
+          <a class="botao pequeno" id="corte-original" target="_blank" rel="noopener"><svg class="i"><use href="#i-ext"/></svg>Ver original</a>
+        </div>
+      </div>
+      <div class="bloco" id="corte-voz-bloco">
+        <h4>Narração</h4>
+        <div class="linha"><span id="corte-voz-texto" style="flex:1;min-width:0"></span>
+          <button class="botao pequeno" id="corte-narrar"><svg class="i"><use href="#i-voz"/></svg><span>Narrar</span></button></div>
+      </div>
+      <div class="modal-acoes">
+        <button class="botao perigo" id="corte-descartar"><svg class="i"><use href="#i-x"/></svg>Descartar</button>
+        <button class="botao ok" id="corte-aprovar"><svg class="i"><use href="#i-check"/></svg>Aprovar</button>
+        <a class="botao" id="corte-baixar" download style="flex:0 0 auto" title="Baixar o vídeo"><svg class="i"><use href="#i-baixar"/></svg></a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/cortes.js"></script>{% endblock %}

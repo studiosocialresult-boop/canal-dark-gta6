@@ -254,6 +254,7 @@ class TestePipelineCompleto(unittest.TestCase):
                           modulo_frases.repartir_tempo("Tradução de teste.", f.inicio, f.fim))
                     for f in frases]
 
+        banco.criar_tabelas()
         banco.salvar_config(1, "duracao_min_s", 5)           # o video de exemplo e curto
         self.addCleanup(banco.salvar_config, 1, "duracao_min_s", 20)
 
@@ -674,6 +675,161 @@ class TesteMixagem(unittest.TestCase):
         with mock.patch.object(modulo_voz, "narrar_corte", side_effect=modulo_voz.ErroVoz("sem saldo")) as narra:
             pipeline._etapa_voz(video_id)                 # nao levanta erro
         narra.assert_called_once_with(com)
+
+
+class TestePainel(unittest.TestCase):
+    """Painel: paginas, API, fila de trabalho e seguranca dos arquivos."""
+    VIDEO = Path(__file__).parent / "exemplo_zoo.mp4"
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"       # o teste chama a fila na mao
+        from fastapi.testclient import TestClient
+        from app.painel import servidor
+        cls.servidor = servidor
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        banco.criar_tabelas()
+        self.video_id = banco.registrar_video(1, "youtube", "painel01a12", "https://www.youtube.com/watch?v=painel01a12")
+        banco.atualizar_video(self.video_id, titulo="Video de teste", canal="Canal Teste")
+        self.corte_id = banco.registrar_corte(
+            1, self.video_id, CorteProposto(2, 9, 10.0, 50.0, 80, "Motivo do teste.", "Titulo do teste", "narrado"))
+        self.addCleanup(self._limpar)
+
+    def _limpar(self):
+        import sqlite3
+        with sqlite3.connect(config.ARQUIVO_BANCO) as conexao:
+            conexao.execute("DELETE FROM fila")
+            conexao.execute("DELETE FROM narracoes")
+            conexao.execute("DELETE FROM cortes WHERE video_id = ?", (self.video_id,))
+            conexao.execute("DELETE FROM videos WHERE id = ?", (self.video_id,))
+
+    def test_paginas_existem(self):
+        for caminho in ("/cortes", "/configuracoes", "/hoje", "/templates", "/contas"):
+            self.assertEqual(self.cliente.get(caminho).status_code, 200, caminho)
+        self.assertEqual(self.cliente.get("/nao-existe").status_code, 404)
+        self.assertEqual(self.cliente.get("/", follow_redirects=False).headers["location"], "/cortes")
+
+    def test_lista_de_cortes_traz_fonte_e_numeros(self):
+        dados = self.cliente.get("/api/cortes").json()
+        corte = next(c for c in dados["cortes"] if c["id"] == self.corte_id)
+        self.assertEqual(corte["canal"], "Canal Teste")
+        self.assertEqual(corte["modo"], "narrado")
+        self.assertIsNone(corte["narracao"])
+        self.assertGreaterEqual(dados["numeros"]["revisar"], 0)
+
+    def test_aprovar_descartar_e_validar(self):
+        post = lambda c, **corpo: self.cliente.post(f"/api/cortes/{c}/estado", json=corpo)   # noqa: E731
+        self.assertEqual(post(self.corte_id, estado="aprovado").status_code, 200)
+        self.assertEqual(banco.ler_corte(self.corte_id)["estado"], "aprovado")
+        self.assertEqual(post(self.corte_id, estado="postado").status_code, 400)       # estado que o dono nao escolhe
+        self.assertEqual(post(999999, estado="aprovado").status_code, 404)
+        em_massa = self.cliente.post("/api/cortes/estado", json={"ids": [self.corte_id], "estado": "descartado"})
+        self.assertEqual(em_massa.json()["total"], 1)
+        self.assertEqual(banco.ler_corte(self.corte_id)["estado"], "descartado")
+
+    def test_link_novo_entra_na_fila_e_repetido_nao(self):
+        link = "https://www.youtube.com/watch?v=fila0000001"
+        self.assertEqual(self.cliente.post("/api/links", json={"url": link}).status_code, 200)
+        repetido = self.cliente.post("/api/links", json={"url": link})
+        self.assertEqual(repetido.status_code, 409)
+        self.assertEqual(self.cliente.get("/api/fila").json()["ativos"], 1)
+
+    def test_link_invalido_ou_ja_processado(self):
+        for url in ("", "banana", "https://exemplo.com/x"):
+            resposta = self.cliente.post("/api/links", json={"url": url})
+            self.assertEqual(resposta.status_code, 400, url)
+            self.assertIn("YouTube", resposta.json()["erro"])
+        banco.atualizar_video(self.video_id, estado="pronto")
+        resposta = self.cliente.post("/api/links", json={"url": "https://www.youtube.com/watch?v=painel01a12"})
+        self.assertEqual(resposta.status_code, 409)
+
+    def test_narrar_exige_chave_e_nao_duplica(self):
+        banco.atualizar_corte(self.corte_id, estado="renderizado", caminho_arquivo="cortes/1/x.mp4")
+        with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": ""}):
+            self.assertEqual(self.cliente.post(f"/api/cortes/{self.corte_id}/narrar").status_code, 400)
+        with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "chave"}):
+            self.assertEqual(self.cliente.post(f"/api/cortes/{self.corte_id}/narrar").status_code, 200)
+            self.assertEqual(self.cliente.post(f"/api/cortes/{self.corte_id}/narrar").status_code, 409)
+
+    def test_configuracoes_validam_limites(self):
+        put = lambda **corpo: self.cliente.put("/api/configuracoes", json=corpo)   # noqa: E731
+        self.assertEqual(put(nota_minima_narracao=65).status_code, 200)
+        self.assertEqual(banco.ler_config(1, "nota_minima_narracao"), 65)
+        self.addCleanup(banco.salvar_config, 1, "nota_minima_narracao", 70)
+        self.assertEqual(put(nota_minima_narracao=500).status_code, 400)
+        self.assertEqual(put(nota_minima_narracao="abc").status_code, 400)
+        self.assertEqual(put(chave_inventada=1).status_code, 400)
+        self.assertEqual(put(cortes_min=9, cortes_max=2).status_code, 400)
+        self.assertEqual(banco.ler_config(1, "cortes_min"), 3)             # nada foi salvo pela metade
+
+    def test_sistema_nao_vaza_chaves(self):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-segredo-123"}):
+            texto = self.cliente.get("/api/configuracoes").text
+        self.assertNotIn("segredo", texto)
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_midia_miniatura_e_acesso_restrito(self):
+        import shutil
+        pasta = config.PASTA_CORTES / "painel"
+        pasta.mkdir(parents=True, exist_ok=True)
+        shutil.copy(self.VIDEO, pasta / "corte_teste.mp4")
+        banco.atualizar_corte(self.corte_id, estado="renderizado",
+                              caminho_arquivo=config.caminho_relativo(pasta / "corte_teste.mp4"))
+        self.assertEqual(self.cliente.get("/midia/cortes/painel/corte_teste.mp4").status_code, 200)
+        miniatura = self.cliente.get(f"/miniatura/{self.corte_id}.jpg")
+        self.assertEqual(miniatura.status_code, 200)
+        self.assertEqual(miniatura.headers["content-type"], "image/jpeg")
+        # so a pasta dos cortes e servida: nada de banco, chaves ou outras pastas
+        for tentativa in ("/midia/canal.db", "/midia/%2e%2e/canal.db", "/midia/brutos/youtube_x.mp4",
+                          "/midia/cortes/../canal.db"):
+            self.assertEqual(self.cliente.get(tentativa).status_code, 404, tentativa)
+
+    # ---------- trabalhador da fila ----------
+
+    def test_fila_processa_link_e_resume(self):
+        from app.painel import fila
+        link = "https://www.youtube.com/watch?v=painel01a12"
+        banco.atualizar_video(self.video_id, estado="analisado")
+        item = banco.enfileirar(1, "link", link, link)
+        with mock.patch.object(fila.pipeline, "processar_link") as processar:
+            self.assertTrue(fila.processar_proximo())
+            processar.assert_called_once()
+            self.assertIn("progresso", processar.call_args.kwargs)
+        linha = [i for i in banco.listar_fila(1) if i["id"] == item][0]
+        self.assertEqual(linha["estado"], "pronto")
+        self.assertEqual(linha["resultado"], "1 corte para revisar")
+        self.assertFalse(fila.processar_proximo())                     # fila vazia
+
+    def test_fila_marca_falha_sem_travar_os_proximos(self):
+        from app.painel import fila
+        ruim = banco.enfileirar(1, "narrar", str(self.corte_id), "ruim")
+        bom = banco.enfileirar(1, "narrar", str(self.corte_id), "bom")
+        efeitos = [RuntimeError("a ElevenLabs recusou"), Path("ok.mp4")]
+        with mock.patch.object(fila.pipeline, "narrar_e_renderizar", side_effect=efeitos):
+            fila.processar_proximo()
+            fila.processar_proximo()
+        estados = {i["id"]: (i["estado"], i["resultado"]) for i in banco.listar_fila(1)}
+        self.assertEqual(estados[ruim], ("falhou", "a ElevenLabs recusou"))
+        self.assertEqual(estados[bom][0], "pronto")
+
+    def test_video_que_falhou_vira_item_falho_com_a_causa(self):
+        from app.painel import fila
+        banco.atualizar_video(self.video_id, estado="falhou", erro="O video tem restricao de idade.")
+        banco.enfileirar(1, "link", "https://www.youtube.com/watch?v=painel01a12", "x")
+        with mock.patch.object(fila.pipeline, "processar_link"):
+            fila.processar_proximo()
+        item = banco.listar_fila(1)[0]
+        self.assertEqual(item["estado"], "falhou")
+        self.assertIn("restricao de idade", item["resultado"])
+
+    def test_painel_religado_retoma_o_que_estava_no_meio(self):
+        item = banco.enfileirar(1, "link", "https://www.youtube.com/watch?v=retoma000001", "x")
+        banco.atualizar_fila(item, estado="processando", progresso="Transcrevendo")
+        banco.retomar_fila()
+        linha = [i for i in banco.listar_fila(1) if i["id"] == item][0]
+        self.assertEqual(linha["estado"], "aguardando")
 
 
 if __name__ == "__main__":

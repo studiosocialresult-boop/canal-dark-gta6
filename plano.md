@@ -181,7 +181,11 @@ Evitar `max`: custa muito e costuma pensar demais.
 - Nesta fase entram o esqueleto do painel e a tela **Cortes**. As demais telas do menu aparecem conforme as fases seguintes.
 - Telas por fase: **Cortes** (Fase 3); **Templates**, **Perfis** e **Editor** (Fase 4); **Contas** e **Agenda** (Fase 5); **Hoje** (Fase 6). **Configurações** nasce na Fase 3 e cresce a cada fase.
 - Na tela Cortes, cada corte mostra a fonte e tem o botão para narrar os que ficaram abaixo da nota mínima.
-- **Pronto quando:** dá para fazer o fluxo inteiro sem abrir o terminal.
+- **Como ficou (13/11/2026):** painel em FastAPI + HTML/CSS/JS puros (sem bibliotecas externas, funciona offline). Liga com `iniciar_painel.bat` (ou `python -m app.painel`) em http://127.0.0.1:8000. Marca própria "Canal Dark", tema claro e escuro automático.
+  - **Além da referência:** números do dia (para revisar, aprovados, criados hoje, custo por corte) e gasto com IA na barra lateral; revisão por teclado (`A` aprova, `D` descarta, setas navegam, `/` busca, `N` novo corte, `F` fila); desfazer após aprovar/descartar; seleção em massa; prévia em movimento ao passar o mouse; fila ao vivo numa gaveta lateral com andamento e aviso ao terminar; filtros por modo e ordenação; botão de copiar o crédito da fonte; estado do sistema (chaves, ffmpeg, Deno, cookies) nas Configurações; funciona também em tela estreita.
+  - **Fila de trabalho:** tabela `fila` no banco; um item por vez (link ou narração). Se o painel for desligado no meio, o item volta para a fila e continua de onde parou.
+  - **Antes da VPS (Fase 7):** o painel não tem login e escuta só neste computador. Na VPS precisa de proteção de acesso (senha ou acesso só pela rede privada) antes de ficar acessível pela internet.
+- **Pronto quando:** dá para fazer o fluxo inteiro sem abrir o terminal. *(Falta o dono colar um link novo no painel e acompanhar até os cortes aparecerem.)*
 - **Modelo:** Sonnet 5.5
 
 ### Fase 4 — Multiplicador e templates
