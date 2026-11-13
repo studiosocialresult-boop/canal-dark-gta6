@@ -11,6 +11,7 @@ deste, sem mexer no resto.
 Rodar sozinho:
     python -m app.busca.perfil @nomedocanal
 """
+import http.cookiejar
 import json
 import re
 import subprocess
@@ -31,7 +32,9 @@ COM_DATA = 15          # quantos dos mais recentes tem a data lida (cada um e um
 VALIDADE_CACHE_S = 600
 _cache: dict = {}
 
-CABECALHOS = {"Accept-Language": "en-US,en;q=0.9", "User-Agent": "Mozilla/5.0"}
+CABECALHOS = {"Accept-Language": "en-US,en;q=0.9",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/140.0 Safari/537.36"}
 
 
 class ErroPerfil(Exception):
@@ -93,10 +96,24 @@ def _yt_dlp(args: list[str], timeout: int = 150) -> str:
     return resultado.stdout
 
 
-def _data_do_video(video_id: str) -> str | None:
+def _cookies():
+    """Login da conta secundaria (cookies.txt), se existir. Em servidor (VPS) o YouTube pede
+    "confirme que nao e um robo" para visitas anonimas e a pagina vem sem a data."""
+    if not config.ARQUIVO_COOKIES.exists():
+        return None
+    pote = http.cookiejar.MozillaCookieJar(str(config.ARQUIVO_COOKIES))
+    try:
+        pote.load(ignore_discard=True, ignore_expires=True)
+    except (OSError, http.cookiejar.LoadError):
+        return None
+    return pote
+
+
+def _data_do_video(video_id: str, cookies=None) -> str | None:
     """Data de publicacao (ISO) lida na pagina do video. None se nao deu (so some a velocidade)."""
     try:
-        resposta = requests.get(f"https://www.youtube.com/watch?v={video_id}", headers=CABECALHOS, timeout=20)
+        resposta = requests.get(f"https://www.youtube.com/watch?v={video_id}", headers=CABECALHOS,
+                                cookies=cookies, timeout=20)
         achou = (re.search(r'itemprop="datePublished" content="([^"]+)"', resposta.text)
                  or re.search(r'"publishDate":"([^"]+)"', resposta.text))
     except requests.RequestException:
@@ -108,8 +125,9 @@ def _datas(ids: list[str]) -> dict[str, str]:
     """Le as datas de varios videos ao mesmo tempo."""
     if not ids:
         return {}
+    cookies = _cookies()
     with ThreadPoolExecutor(max_workers=6) as grupo:
-        return {i: d for i, d in zip(ids, grupo.map(_data_do_video, ids)) if d}
+        return {i: d for i, d in zip(ids, grupo.map(lambda v: _data_do_video(v, cookies), ids)) if d}
 
 
 def velocidade(views: int | None, publicado: str | None, agora: datetime | None = None) -> float | None:

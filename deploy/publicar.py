@@ -18,6 +18,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from contextlib import closing
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -86,7 +87,8 @@ def _pacote_dos_dados(pasta: Path) -> Path:
     """Copia o banco de forma segura (mesmo com o painel aberto) e empacota o resto de dados/."""
     dados = RAIZ / "dados"
     copia = pasta / "canal.db"
-    with sqlite3.connect(dados / "canal.db") as origem, sqlite3.connect(copia) as destino:
+    # closing(): o "with" do sqlite3 sozinho nao fecha o arquivo, e o Windows nao deixa apagar arquivo aberto.
+    with closing(sqlite3.connect(dados / "canal.db")) as origem, closing(sqlite3.connect(copia)) as destino:
         origem.backup(destino)
     arquivo = pasta / "dados.tar.gz"
     with tarfile.open(arquivo, "w:gz") as tar:

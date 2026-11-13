@@ -211,6 +211,10 @@ def rodar(usuario_id: int = config.USUARIO_PADRAO, enfileirar: bool = True,
         candidatos = coletor() if coletor else coletar_busca() + coletar_canais(usuario_id)
         ranking = montar_ranking(candidatos, janela, agora)
         if not ranking:
+            if candidatos and not any(c.get("publicado") for c in candidatos):
+                raise RuntimeError(f"A busca achou {len(candidatos)} vídeos, mas o YouTube escondeu as datas de "
+                                   "postagem (pediu login). O cookies.txt provavelmente venceu: exporte de novo e "
+                                   "use o trocar_cookies_vps.bat.")
             raise RuntimeError("Não encontrei nenhum vídeo recente. O YouTube pode ter recusado a busca; "
                                "confira o cookies.txt e tente de novo.")
         faltam = videos_para_a_meta(usuario_id, dia) if enfileirar else 0
