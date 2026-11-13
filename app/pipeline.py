@@ -1,6 +1,6 @@
 """Pipeline: a linha de montagem que transforma um link em cortes prontos.
 
-    link -> download -> transcricao -> cerebro -> edicao -> cortes .mp4
+    link -> download -> transcricao -> cerebro -> roteiro -> voz -> edicao -> cortes .mp4
 
 Cada etapa grava o resultado no banco. Se algo falhar no meio, rodar de novo
 com o mesmo link continua de onde parou, sem baixar, transcrever ou pagar a
@@ -17,6 +17,7 @@ from app.cerebro import escolher, traduzir
 from app.contratos import CorteProposto, Transcricao, VideoBaixado
 from app.download import baixar
 from app.edicao import cortar
+from app.narracao import roteiro, voz
 from app.transcricao import transcrever
 
 log = config.criar_log("pipeline")
@@ -44,6 +45,8 @@ def processar_link(url: str, usuario_id: int = config.USUARIO_PADRAO) -> list[Pa
         video = _etapa_download(video_id, url)
         transcricao = _etapa_transcricao(video_id, video)
         _etapa_cerebro(video_id, usuario_id, video, transcricao)
+        _etapa_roteiro(video_id, usuario_id)
+        _etapa_voz(video_id)
         arquivos = _etapa_edicao(video_id, usuario_id, video, transcricao)
     except Exception as erro:
         log.error("O video %d falhou: %s", video_id, erro)
@@ -103,35 +106,90 @@ def _etapa_cerebro(video_id: int, usuario_id: int, video: VideoBaixado,
     banco.atualizar_video(video_id, estado="analisado")
 
 
+def _etapa_roteiro(video_id: int, usuario_id: int) -> None:
+    """Escreve o roteiro dos cortes com nota suficiente para ganhar narracao.
+
+    Os cortes abaixo da nota minima ficam sem roteiro ate alguem pedir no painel.
+    Um roteiro que falha nao derruba o video: o corte so fica sem narracao.
+    """
+    nota_minima = banco.ler_config(usuario_id, "nota_minima_narracao")
+    for linha in banco.cortes_do_video(video_id):
+        if linha["nota"] < nota_minima or banco.ler_narracao(linha["id"]):
+            continue
+        log.info("Roteiro: escrevendo a narracao do corte %d (%s)...", linha["id"], linha["titulo"])
+        try:
+            roteiro.roteirizar_corte(linha["id"])
+        except Exception as erro:
+            log.error("Roteiro: o corte %d ficou sem roteiro: %s", linha["id"], erro)
+
+
+def _etapa_voz(video_id: int) -> None:
+    """Gera a voz dos cortes que ja tem roteiro. Se falhar, o corte sai sem narracao."""
+    for linha in banco.cortes_do_video(video_id):
+        narracao = banco.ler_narracao(linha["id"])
+        if narracao is None or narracao["estado"] == "narrado":
+            continue
+        try:
+            voz.narrar_corte(linha["id"])
+        except Exception as erro:
+            log.error("Voz: o corte %d ficou sem narracao: %s", linha["id"], erro)
+
+
 def _etapa_edicao(video_id: int, usuario_id: int, video: VideoBaixado,
                   transcricao: Transcricao) -> list[Path]:
     arquivos: list[Path] = []
     pendentes = [c for c in banco.cortes_do_video(video_id) if c["estado"] in ("proposto", "falhou")]
     for numero, linha in enumerate(pendentes, start=1):
         log.info("Edicao: montando corte %d de %d (%s)...", numero, len(pendentes), linha["titulo"])
-        corte = CorteProposto(
-            frase_inicio=linha["frase_inicio"], frase_fim=linha["frase_fim"],
-            inicio=linha["inicio_s"], fim=linha["fim_s"], nota=linha["nota"],
-            motivo=linha["motivo"], titulo=linha["titulo"], modo=linha["modo"],
-        )
-        destino = config.PASTA_CORTES / str(video_id) / f"corte_{linha['id']}.mp4"
         try:
-            frases = transcricao.frases[corte.frase_inicio:corte.frase_fim + 1]
-            if transcricao.idioma != "pt":
-                frases = traduzir.traduzir_frases(
-                    frases, transcricao.idioma, usuario_id=usuario_id, video_id=video_id)
-            cortar.gerar_corte(video.caminho, corte, frases, destino)
+            arquivos.append(_renderizar(linha, usuario_id, video, transcricao))
         except Exception as erro:
             # Um corte com problema nao derruba os outros.
             log.error("Edicao: o corte %d falhou: %s", linha["id"], erro)
             banco.atualizar_corte(linha["id"], estado="falhou", erro=str(erro)[:500])
-            continue
-        banco.atualizar_corte(
-            linha["id"], estado="renderizado", erro=None,
-            caminho_arquivo=config.caminho_relativo(destino),
-        )
-        arquivos.append(destino)
     return arquivos
+
+
+def _renderizar(linha, usuario_id: int, video: VideoBaixado, transcricao: Transcricao) -> Path:
+    """Gera o mp4 de um corte, com a narracao se ela ja estiver pronta, e registra no banco."""
+    corte = CorteProposto(
+        frase_inicio=linha["frase_inicio"], frase_fim=linha["frase_fim"],
+        inicio=linha["inicio_s"], fim=linha["fim_s"], nota=linha["nota"],
+        motivo=linha["motivo"], titulo=linha["titulo"], modo=linha["modo"],
+    )
+    destino = config.PASTA_CORTES / str(linha["video_id"]) / f"corte_{linha['id']}.mp4"
+
+    narracao = banco.ler_narracao(linha["id"])
+    com_voz = narracao is not None and narracao["estado"] == "narrado"
+    pasta_voz = voz.pasta_da_narracao(linha["id"])
+
+    frases = transcricao.frases[corte.frase_inicio:corte.frase_fim + 1]
+    # A legenda da fala so aparece quando ela e ouvida: no modo narrado ela e trocada
+    # pelo texto da narracao, entao nao ha motivo para pagar a traducao.
+    precisa_traduzir = transcricao.idioma != "pt" and not (com_voz and corte.modo == "narrado")
+    if precisa_traduzir:
+        frases = traduzir.traduzir_frases(
+            frases, transcricao.idioma, usuario_id=usuario_id, video_id=linha["video_id"])
+    cortar.gerar_corte(
+        video.caminho, corte, frases, destino,
+        voz=voz.Voz.carregar(pasta_voz) if com_voz else None,
+        arquivo_voz=pasta_voz / "narracao.mp3" if com_voz else None)
+    banco.atualizar_corte(
+        linha["id"], estado="renderizado", erro=None,
+        caminho_arquivo=config.caminho_relativo(destino))
+    return destino
+
+
+def renderizar_corte(corte_id: int) -> Path:
+    """Refaz o mp4 de um corte que ja existe (por exemplo, depois de gerar a narracao)."""
+    linha = banco.ler_corte(corte_id)
+    registro = banco.ler_video(linha["video_id"])
+    transcricao = Transcricao.carregar(config.PASTA_TRANSCRICOES / f"{linha['video_id']}.json")
+    video = VideoBaixado(
+        plataforma=registro["plataforma"], id_externo=registro["id_externo"], url=registro["url"],
+        titulo=registro["titulo"] or "", canal=registro["canal"] or "",
+        duracao_s=registro["duracao_s"] or 0.0, caminho=config.caminho_absoluto(registro["caminho_arquivo"]))
+    return _renderizar(linha, linha["usuario_id"], video, transcricao)
 
 
 if __name__ == "__main__":

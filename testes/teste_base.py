@@ -16,7 +16,11 @@ os.environ["CANAL_PASTA_DADOS"] = _PASTA_TEMPORARIA.name
 
 from app import banco, config, ia  # noqa: E402
 from app.cerebro import escolher  # noqa: E402
-from app.contratos import Frase, Palavra, Transcricao, VideoBaixado  # noqa: E402
+from unittest import mock  # noqa: E402
+from app.contratos import (BlocoRoteiro, CorteProposto, Frase, Palavra, Roteiro,  # noqa: E402
+                           Transcricao, VideoBaixado)
+from app.narracao import roteiro as modulo_roteiro  # noqa: E402
+from app.narracao import voz as modulo_voz  # noqa: E402
 from app.transcricao import frases as modulo_frases  # noqa: E402
 
 
@@ -255,8 +259,10 @@ class TestePipelineCompleto(unittest.TestCase):
 
         with mock.patch.object(baixar, "baixar", return_value=video), \
              mock.patch.object(escolher, "escolher_cortes", side_effect=cerebro_com_cliente_falso), \
-             mock.patch.object(traduzir, "traduzir_frases", side_effect=traducao_falsa) as traduz:
+             mock.patch.object(traduzir, "traduzir_frases", side_effect=traducao_falsa) as traduz, \
+             mock.patch.object(modulo_roteiro, "roteirizar_corte") as roteiriza:
             arquivos = pipeline.processar_link(link)
+            roteiriza.assert_called_once()                    # nota 88: ganha roteiro
             self.assertEqual(len(arquivos), 1)
             self.assertTrue(arquivos[0].exists())
             traduz.assert_called_once()                       # o video e em ingles
@@ -354,6 +360,320 @@ class TesteCerebro(unittest.TestCase):
         partes = escolher.dividir_em_partes(longas)
         self.assertEqual(len(partes), 3)
         self.assertEqual(sum(len(p) for p in partes), 400)
+
+
+def texto_de(tamanho: int) -> str:
+    """Um texto qualquer com exatamente o tamanho pedido."""
+    return ("palavra " * (tamanho // 8 + 1))[:tamanho - 1].rstrip() + "."
+
+
+class TesteRoteiro(unittest.TestCase):
+    """Roteiro da narracao: validacao das ancoras e do tempo, com IA simulada."""
+
+    def setUp(self):
+        banco.criar_tabelas()
+        self.transcricao = transcricao_falsa()          # frases de 5 s
+        self.video = VideoBaixado("youtube", "xyz", "https://exemplo/xyz", "Trailer 3 analisado",
+                                  "Canal Exemplo", 150.0, Path("nao_usado.mp4"))
+        # Frases 2 a 9: de 10 s a 50 s do video, 40 s de corte.
+        self.corte = CorteProposto(2, 9, 9.85, 50.1, 80, "Gancho e desfecho.", "Titulo", "narrado")
+        self.gancho = CorteProposto(2, 9, 9.85, 50.1, 80, "Reacao.", "Titulo", "original")
+
+    def blocos(self, *pares):
+        return {"blocos": [{"frase_inicio": a, "texto": t} for a, t in pares]}
+
+    def bom(self):
+        return self.blocos((2, texto_de(130)), (4, texto_de(130)), (6, texto_de(130)), (8, texto_de(130)))
+
+    def validar(self, dados):
+        return modulo_roteiro.validar_narrado(dados, self.corte, self.transcricao)
+
+    def test_roteiro_correto_passa(self):
+        self.assertEqual(self.validar(self.bom()), [])
+
+    def test_ancora_fora_do_corte(self):
+        self.assertIn("não são frases do corte", self.validar(self.blocos((2, texto_de(130)), (15, "x")))[0])
+
+    def test_primeiro_bloco_na_primeira_frase(self):
+        dados = self.blocos((3, texto_de(130)), (5, texto_de(130)), (7, texto_de(130)))
+        self.assertTrue(any("primeiro bloco" in p for p in self.validar(dados)))
+
+    def test_ancoras_fora_de_ordem(self):
+        dados = self.blocos((2, texto_de(130)), (6, texto_de(130)), (4, texto_de(130)))
+        self.assertTrue(any("ordem crescente" in p for p in self.validar(dados)))
+
+    def test_bloco_longo_demais(self):
+        dados = self.bom()
+        dados["blocos"][1]["texto"] = texto_de(200)      # janela de 10 s comporta 160
+        problemas = self.validar(dados)
+        self.assertEqual(len(problemas), 1)
+        self.assertIn("no máximo 160", problemas[0])
+
+    def test_bloco_curto_deixa_silencio(self):
+        dados = self.bom()
+        dados["blocos"][2]["texto"] = texto_de(30)       # 10 s de janela, 2 s de voz
+        problemas = self.validar(dados)
+        self.assertEqual(len(problemas), 1)
+        self.assertIn("sem voz", problemas[0])
+
+    def test_sinais_que_a_voz_nao_le(self):
+        dados = self.bom()
+        dados["blocos"][0]["texto"] = "[pausa] " + texto_de(120)
+        self.assertTrue(any("sinais" in p for p in self.validar(dados)))
+
+    def test_lista_vazia_no_modo_narrado(self):
+        self.assertTrue(self.validar({"blocos": []}))
+
+    def test_algarismo_pesa_mais(self):
+        self.assertEqual(modulo_roteiro.peso_fala("209 gigas"), 9 + 3 * 4)
+
+    def test_gancho(self):
+        validar = lambda d: modulo_roteiro.validar_gancho(d, self.gancho)   # noqa: E731
+        self.assertEqual(validar({"blocos": []}), [])                       # sem gancho e permitido
+        self.assertEqual(validar(self.blocos((2, "O Speed descobre o lanche mais absurdo do jogo."))), [])
+        self.assertTrue(validar(self.blocos((2, texto_de(110)))))           # longo demais
+        self.assertTrue(validar(self.blocos((3, "Curto."))))                # ancora errada
+        self.assertTrue(validar(self.blocos((2, "Um."), (4, "Dois."))))     # so cabe um
+
+    def test_resposta_invalida_gera_nova_tentativa(self):
+        ruim = self.bom()
+        ruim["blocos"][0]["texto"] = texto_de(400)
+        cliente = ClienteFalso([resposta_falsa(ruim), resposta_falsa(self.bom())])
+        resultado = modulo_roteiro.escrever_roteiro(
+            self.corte, self.transcricao, self.video, usuario_id=1, cliente=cliente)
+        self.assertEqual(len(cliente.chamadas), 2)
+        self.assertEqual([b.frase_inicio for b in resultado.blocos], [2, 4, 6, 8])
+        self.assertIn("no máximo", cliente.chamadas[1]["messages"][-1]["content"])
+
+    def test_prompts_carregam_e_mensagem_tem_contexto(self):
+        for corte, resposta in ((self.corte, self.bom()), (self.gancho, {"blocos": []})):
+            cliente = ClienteFalso([resposta_falsa(resposta)])
+            modulo_roteiro.escrever_roteiro(corte, self.transcricao, self.video,
+                                            usuario_id=1, cliente=cliente)
+            chamada = cliente.chamadas[0]
+            self.assertNotIn("{{", chamada["system"])
+            self.assertIn("Fidelidade", chamada["system"])               # regras de escrita entraram
+            mensagem = chamada["messages"][0]["content"]
+            self.assertIn("frase numero 1 ", mensagem)                   # contexto antes do corte
+            self.assertIn("[2] (começa em 0.2 s", mensagem)
+            self.assertNotIn("[10]", mensagem)                           # nada depois do corte
+
+    def test_roteiro_fica_guardado_no_banco(self):
+        video_id = banco.registrar_video(1, "youtube", "roteiro01", "https://exemplo/roteiro01")
+        banco.atualizar_video(video_id, titulo="Trailer", canal="Canal Exemplo")
+        config.garantir_pastas()
+        self.transcricao.salvar(config.PASTA_TRANSCRICOES / f"{video_id}.json")
+        corte_id = banco.registrar_corte(1, video_id, self.corte)
+        self.assertIsNone(banco.ler_narracao(corte_id))
+
+        modulo_roteiro.roteirizar_corte(corte_id, cliente=ClienteFalso([resposta_falsa(self.bom())]))
+        linha = banco.ler_narracao(corte_id)
+        self.assertEqual(linha["estado"], "roteirizado")
+        guardado = Roteiro.de_json(linha["roteiro"])
+        self.assertEqual(guardado.modo, "narrado")
+        self.assertEqual(len(guardado.blocos), 4)
+        self.assertEqual(linha["caracteres"], len(guardado.texto))
+
+    def test_pipeline_so_roteiriza_nota_alta_e_nao_quebra(self):
+        from unittest import mock
+        from app import pipeline
+        video_id = banco.registrar_video(1, "youtube", "roteiro02", "https://exemplo/roteiro02")
+        alto = banco.registrar_corte(1, video_id, self.corte)                      # nota 80
+        baixo = CorteProposto(12, 16, 60.0, 85.0, 60, "Morno.", "Fraco", "narrado")
+        banco.registrar_corte(1, video_id, baixo)
+        with mock.patch.object(modulo_roteiro, "roteirizar_corte",
+                               side_effect=ia.ErroIA("falhou")) as roteiriza:
+            pipeline._etapa_roteiro(video_id, 1)                                   # nao levanta erro
+        roteiriza.assert_called_once_with(alto)
+
+
+def mp3_de_teste(segundos: float) -> bytes:
+    """Um mp3 de verdade (um tom) com a duracao pedida, para testar sem a ElevenLabs."""
+    import subprocess
+    with tempfile.TemporaryDirectory() as pasta:
+        arquivo = Path(pasta) / "tom.mp3"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi",
+                        "-i", f"sine=frequency=440:duration={segundos}", str(arquivo)], check=True)
+        return arquivo.read_bytes()
+
+
+def alinhamento_de(texto: str, segundos: float) -> dict:
+    """Tempos por caractere inventados: as letras dividem o tempo por igual."""
+    passo = segundos / len(texto)
+    return {"characters": list(texto),
+            "character_start_times_seconds": [i * passo for i in range(len(texto))],
+            "character_end_times_seconds": [(i + 1) * passo for i in range(len(texto))]}
+
+
+class TesteVoz(unittest.TestCase):
+    def setUp(self):
+        banco.criar_tabelas()
+        self.transcricao = transcricao_falsa()          # frases de 5 s
+        self.corte = CorteProposto(2, 9, 9.85, 50.1, 80, "Motivo.", "Titulo", "narrado")
+        self.roteiro = Roteiro("narrado", [
+            BlocoRoteiro(2, "Primeira parte da narracao."),
+            BlocoRoteiro(4, "Segunda parte, que vem depois."),
+            BlocoRoteiro(8, "Terceira e ultima."),
+        ])
+
+    def falsa(self, duracoes):
+        """Troca a ElevenLabs por uma resposta de mentira, com a duracao de cada bloco."""
+        fila = list(duracoes)
+
+        def _pedir(texto, **_):
+            segundos = fila.pop(0)
+            return mp3_de_teste(segundos), alinhamento_de(texto, segundos)
+        return mock.patch.object(modulo_voz, "_pedir_voz", side_effect=_pedir)
+
+    def test_palavras_do_alinhamento(self):
+        palavras = modulo_voz.palavras_do_alinhamento("Oi, GTA 6!", alinhamento_de("Oi, GTA 6!", 5.0))
+        self.assertEqual([p.texto for p in palavras], ["Oi,", "GTA", "6!"])
+        self.assertAlmostEqual(palavras[0].inicio, 0.0)
+        self.assertAlmostEqual(palavras[-1].fim, 5.0)
+        self.assertLess(palavras[0].fim, palavras[1].inicio + 0.01)
+
+    def test_blocos_comecam_na_ancora(self):
+        self.assertEqual(modulo_voz.posicionar([3.0, 3.0], [0.2, 10.2]), [0.2, 10.2])
+
+    def test_bloco_que_estoura_empurra_o_proximo(self):
+        inicios = modulo_voz.posicionar([8.0, 3.0], [0.0, 5.0])      # o primeiro termina em 8 s
+        self.assertAlmostEqual(inicios[1], 8.0 + config.PAUSA_ENTRE_BLOCOS_S)
+
+    def test_gera_faixa_e_tempos(self):
+        pasta = config.PASTA_NARRACOES / "teste_voz"
+        with self.falsa([3.0, 4.0, 2.0]):
+            voz = modulo_voz.gerar_voz(self.roteiro, self.corte.inicio, self.transcricao, pasta)
+        # ancoras: frase 2 = 0.2 s, frase 4 = 10.2 s, frase 8 = 30.1 s
+        self.assertEqual([round(b.inicio, 1) for b in voz.blocos], [0.2, 10.2, 30.1])
+        self.assertAlmostEqual(voz.duracao_s, 32.1, delta=0.1)
+        self.assertTrue((pasta / "narracao.mp3").exists())
+        self.assertAlmostEqual(modulo_voz._duracao_audio(pasta / "narracao.mp3"), 32.1, delta=0.4)
+        # as palavras do segundo bloco comecam depois do inicio do bloco
+        self.assertGreaterEqual(voz.blocos[1].palavras[0].inicio, 10.1)
+        # salva e carrega igual
+        recarregada = modulo_voz.Voz.carregar(pasta)
+        self.assertEqual(len(recarregada.palavras), len(voz.palavras))
+        self.assertEqual(recarregada.blocos[2].texto, "Terceira e ultima.")
+
+    def test_gancho_comeca_no_zero(self):
+        gancho = Roteiro("original", [BlocoRoteiro(2, "Um gancho curto.")])
+        pasta = config.PASTA_NARRACOES / "teste_gancho"
+        with self.falsa([2.5]):
+            voz = modulo_voz.gerar_voz(gancho, self.corte.inicio, self.transcricao, pasta)
+        self.assertEqual(voz.blocos[0].inicio, 0.0)
+        self.assertAlmostEqual(voz.duracao_s, 2.5, delta=0.1)
+
+    def test_corte_sem_roteiro_e_recusado(self):
+        with self.assertRaises(modulo_voz.ErroVoz):
+            modulo_voz.gerar_voz(Roteiro("narrado", []), 0.0, self.transcricao,
+                                 config.PASTA_NARRACOES / "vazio")
+
+    def test_narrar_corte_guarda_estado_e_custo(self):
+        video_id = banco.registrar_video(1, "youtube", "voz01", "https://exemplo/voz01")
+        config.garantir_pastas()
+        self.transcricao.salvar(config.PASTA_TRANSCRICOES / f"{video_id}.json")
+        corte_id = banco.registrar_corte(1, video_id, self.corte)
+        banco.salvar_roteiro(1, corte_id, self.roteiro)
+        with self.falsa([3.0, 4.0, 2.0]):
+            modulo_voz.narrar_corte(corte_id)
+        linha = banco.ler_narracao(corte_id)
+        self.assertEqual(linha["estado"], "narrado")
+        self.assertTrue(config.caminho_absoluto(linha["caminho_audio"]).exists())
+        self.assertGreater(banco.custo_do_video(video_id), 0)
+
+    def test_erro_de_plano_vira_mensagem_clara(self):
+        resposta = SimpleNamespace(ok=False, status_code=402, text="paid_plan_required")
+        with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "x"}), \
+             mock.patch.object(modulo_voz.requests, "post", return_value=resposta):
+            with self.assertRaises(modulo_voz.ErroVoz) as erro:
+                modulo_voz._pedir_voz("texto")
+        self.assertIn("plano pago", str(erro.exception))
+
+    def test_narrar_corte_falho_fica_marcado(self):
+        video_id = banco.registrar_video(1, "youtube", "voz02", "https://exemplo/voz02")
+        config.garantir_pastas()
+        self.transcricao.salvar(config.PASTA_TRANSCRICOES / f"{video_id}.json")
+        corte_id = banco.registrar_corte(1, video_id, self.corte)
+        banco.salvar_roteiro(1, corte_id, self.roteiro)
+        with mock.patch.object(modulo_voz, "_pedir_voz", side_effect=modulo_voz.ErroVoz("sem caracteres")):
+            with self.assertRaises(modulo_voz.ErroVoz):
+                modulo_voz.narrar_corte(corte_id)
+        self.assertEqual(banco.ler_narracao(corte_id)["estado"], "falhou")
+
+
+class TesteMixagem(unittest.TestCase):
+    """Mixagem da narracao no video, com ffmpeg de verdade e a voz de mentira."""
+    VIDEO = Path(__file__).parent / "exemplo_zoo.mp4"      # 19 s
+
+    def setUp(self):
+        self.pasta = Path(tempfile.mkdtemp(prefix="mix_", dir=config.PASTA_DADOS))
+        (self.pasta / "narracao.mp3").write_bytes(mp3_de_teste(6.0))
+
+    def voz(self, modo, fim):
+        palavras = [Palavra("um", 0.2, 0.6), Palavra("dois", 0.7, 1.2), Palavra("tres.", 1.3, fim)]
+        return modulo_voz.Voz(modo, fim, [modulo_voz.BlocoVoz(2, "um dois tres.", 0.0, fim, palavras)])
+
+    def duracao(self, arquivo):
+        return modulo_voz._duracao_audio(arquivo)
+
+    def streams(self, arquivo):
+        import subprocess
+        saida = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                                "-of", "csv=p=0", str(arquivo)], capture_output=True, text=True).stdout
+        return sorted(saida.split())
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_narrado_mantem_a_duracao_do_corte(self):
+        from app.edicao import cortar
+        corte = CorteProposto(0, 0, 4.5, 12.5, 80, "m", "t", "narrado")      # 8 s
+        saida = cortar.gerar_corte(self.VIDEO, corte, [], self.pasta / "narrado.mp4",
+                                   voz=self.voz("narrado", 5.0), arquivo_voz=self.pasta / "narracao.mp3")
+        self.assertAlmostEqual(self.duracao(saida), 8.0, delta=0.3)
+        self.assertEqual(self.streams(saida), ["audio", "video"])
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_narracao_que_passa_do_corte_segura_a_imagem(self):
+        from app.edicao import cortar
+        corte = CorteProposto(0, 0, 4.5, 7.5, 80, "m", "t", "narrado")       # 3 s, voz de 5 s
+        saida = cortar.gerar_corte(self.VIDEO, corte, [], self.pasta / "longa.mp4",
+                                   voz=self.voz("narrado", 5.0), arquivo_voz=self.pasta / "narracao.mp3")
+        self.assertAlmostEqual(self.duracao(saida), 5.0 + cortar.CAUDA_APOS_NARRACAO_S, delta=0.3)
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_gancho_vem_antes_da_fala_original(self):
+        from app.edicao import cortar
+        corte = CorteProposto(0, 0, 8.0, 14.0, 80, "m", "t", "original")     # 6 s de fala original
+        saida = cortar.gerar_corte(self.VIDEO, corte, [], self.pasta / "gancho.mp4",
+                                   voz=self.voz("original", 3.0), arquivo_voz=self.pasta / "narracao.mp3")
+        esperado = 3.0 + cortar.PAUSA_APOS_GANCHO_S + 6.0
+        self.assertAlmostEqual(self.duracao(saida), esperado, delta=0.3)
+
+    @unittest.skipUnless(VIDEO.exists(), "video de exemplo ausente")
+    def test_gancho_no_inicio_do_video_segura_o_primeiro_quadro(self):
+        from app.edicao import cortar
+        corte = CorteProposto(0, 0, 1.0, 7.0, 80, "m", "t", "original")      # so 1 s antes do corte
+        saida = cortar.gerar_corte(self.VIDEO, corte, [], self.pasta / "inicio.mp4",
+                                   voz=self.voz("original", 3.0), arquivo_voz=self.pasta / "narracao.mp3")
+        esperado = 3.0 + cortar.PAUSA_APOS_GANCHO_S + 6.0
+        self.assertAlmostEqual(self.duracao(saida), esperado, delta=0.3)
+
+    def test_legenda_da_narracao_usa_o_tempo_do_video_original(self):
+        from app.edicao import cortar
+        voz = self.voz("narrado", 2.0)
+        frases = cortar._frases_da_voz(voz, origem=10.0)
+        ass = cortar.gerar_ass(frases, 10.0, 8.0)
+        self.assertIn("0:00:00.20", ass)                  # a primeira palavra entra em 0,2 s do corte
+        self.assertIn("UM", ass)
+
+    def test_pipeline_gera_voz_so_de_quem_tem_roteiro(self):
+        from app import pipeline
+        video_id = banco.registrar_video(1, "youtube", "mix01", "https://exemplo/mix01")
+        com = banco.registrar_corte(1, video_id, CorteProposto(2, 9, 9.85, 50.1, 80, "m", "t", "narrado"))
+        banco.registrar_corte(1, video_id, CorteProposto(12, 16, 60.0, 85.0, 60, "m", "t", "narrado"))
+        banco.salvar_roteiro(1, com, Roteiro("narrado", [BlocoRoteiro(2, "Texto.")]))
+        with mock.patch.object(modulo_voz, "narrar_corte", side_effect=modulo_voz.ErroVoz("sem saldo")) as narra:
+            pipeline._etapa_voz(video_id)                 # nao levanta erro
+        narra.assert_called_once_with(com)
 
 
 if __name__ == "__main__":

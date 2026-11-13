@@ -163,7 +163,16 @@ Evitar `max`: custa muito e costuma pensar demais.
 - O roteiro segue o modo escolhido pelo cérebro: no modo `original`, só um gancho curto na abertura; no modo `narrado`, narração do começo ao fim.
 - ElevenLabs gera a voz em português; o áudio original abaixa automaticamente enquanto a narração fala.
 - A narração só é gerada sozinha para cortes com nota igual ou acima do mínimo (padrão 70). Os demais ficam sem narração até alguém pedir.
-- **Pronto quando:** um corte de cada modo sai com a narração sincronizada e o áudio original no volume certo.
+- **Como o roteiro funciona (decidido em 13/11/2026):**
+  - O roteiro é uma lista de **blocos**. Cada bloco é ancorado em uma frase do corte: a voz começa quando aquela frase começa no vídeo. Isso mantém a narração junto com a imagem. O validador confere se o texto de cada bloco cabe no tempo até o bloco seguinte (ritmo em `app/config.py`, a calibrar com a voz real).
+  - Modo `narrado`: o áudio original fica baixo o corte inteiro (não sobe entre um bloco e outro) e a legenda mostra o **texto da narração**, sincronizada pelos tempos que a ElevenLabs devolve. Por isso o corte narrado é renderizado depois que a voz fica pronta.
+  - Modo `original`: o gancho toca nos segundos **imediatamente antes** do corte. O vídeo começa um pouco antes (o tempo do gancho), com o áudio original baixo, e sobe quando a pessoa começa a falar. Se o corte começa no início do vídeo, segura o primeiro quadro. A IA pode devolver "sem gancho" quando a primeira fala já prende sozinha.
+  - Se a voz de um bloco passar da janela, o bloco seguinte começa logo depois (nunca um por cima do outro).
+  - O roteiro fica na tabela `narracoes` (estado `roteirizado` → `narrado`). Ponto de entrada: `app/narracao/roteiro.py`, função `roteirizar_corte`.
+  - **Voz (13/11/2026):** ElevenLabs, modelo `eleven_multilingual_v2`. Voz provisória: **George** (pronta, em inglês, fala português com leve sotaque), escolhida pelo dono entre as amostras do plano grátis. As vozes em português da conta (Mário, Bianca, Carla) são da biblioteca e **exigem plano pago**; o plano grátis também não permite uso comercial. Trocar a voz é só mudar `ELEVENLABS_VOICE_ID` no `.env`.
+  - **Calibragem real:** a voz fala ~13,8 caracteres por segundo, bem perto dos 14 usados no cálculo do roteiro. Custo estimado da voz: ~US$ 0,10 por corte narrado de 570 caracteres (preço do plano Starter, a confirmar).
+  - **Pipeline:** `roteiro → voz → edição`. Roteiro e voz que falham não derrubam o vídeo: o corte sai sem narração. `pipeline.renderizar_corte(id)` refaz o mp4 de um corte depois que a narração fica pronta (usado pelo botão "narrar" do painel).
+- **Pronto quando:** um corte de cada modo sai com a narração sincronizada e o áudio original no volume certo. *(Testado em 13/11/2026 com os cortes 1 e 3; falta o dono ouvir e aprovar o volume.)*
 - **Modelo:** Fable 5.2 para o prompt do roteiro; Sonnet 5.5 para a integração.
 
 ### Fase 3 — Painel

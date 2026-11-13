@@ -10,7 +10,7 @@ import sqlite3
 from contextlib import closing
 
 from app import config
-from app.contratos import CorteProposto
+from app.contratos import CorteProposto, Roteiro
 
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS usuarios (
@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS cortes (
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Narracao de um corte: primeiro o roteiro (texto), depois o audio.
+-- estado: roteirizado -> narrado (ou falhou). Um corte tem no maximo uma narracao.
+CREATE TABLE IF NOT EXISTS narracoes (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    corte_id INTEGER NOT NULL UNIQUE REFERENCES cortes(id),
+    roteiro TEXT NOT NULL,
+    caracteres INTEGER NOT NULL DEFAULT 0,
+    caminho_audio TEXT,
+    estado TEXT NOT NULL DEFAULT 'roteirizado',
+    erro TEXT,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Cada chamada paga a um servico de IA, para medir o custo por corte.
 CREATE TABLE IF NOT EXISTS uso_api (
     id INTEGER PRIMARY KEY,
@@ -88,6 +102,7 @@ CAMPOS_VIDEO = {
     "caminho_transcricao", "estado", "erro",
 }
 CAMPOS_CORTE = {"estado", "caminho_arquivo", "erro"}
+CAMPOS_NARRACAO = {"caminho_audio", "estado", "erro"}
 
 
 def conectar() -> sqlite3.Connection:
@@ -189,6 +204,37 @@ def cortes_do_video(video_id: int) -> list:
 
 def atualizar_corte(corte_id: int, **campos) -> None:
     _atualizar("cortes", CAMPOS_CORTE, corte_id, campos)
+
+
+def ler_corte(corte_id: int):
+    with closing(conectar()) as conexao:
+        return conexao.execute("SELECT * FROM cortes WHERE id = ?", (corte_id,)).fetchone()
+
+
+# ---------- narracoes ----------
+
+def salvar_roteiro(usuario_id: int, corte_id: int, roteiro: Roteiro) -> int:
+    """Guarda o roteiro do corte e devolve o id da narracao. Regravar troca o texto
+    e volta o estado para 'roteirizado', porque o audio antigo deixa de valer."""
+    with closing(conectar()) as conexao, conexao:
+        conexao.execute(
+            "INSERT INTO narracoes (usuario_id, corte_id, roteiro, caracteres) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (corte_id) DO UPDATE SET roteiro = excluded.roteiro, "
+            "caracteres = excluded.caracteres, caminho_audio = NULL, estado = 'roteirizado', erro = NULL",
+            (usuario_id, corte_id, roteiro.para_json(), len(roteiro.texto)),
+        )
+        linha = conexao.execute("SELECT id FROM narracoes WHERE corte_id = ?", (corte_id,)).fetchone()
+    return linha["id"]
+
+
+def ler_narracao(corte_id: int):
+    """Devolve a linha da narracao do corte, ou None se ele ainda nao tem roteiro."""
+    with closing(conectar()) as conexao:
+        return conexao.execute("SELECT * FROM narracoes WHERE corte_id = ?", (corte_id,)).fetchone()
+
+
+def atualizar_narracao(narracao_id: int, **campos) -> None:
+    _atualizar("narracoes", CAMPOS_NARRACAO, narracao_id, campos)
 
 
 # ---------- gasto com IA ----------

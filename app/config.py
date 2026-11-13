@@ -17,6 +17,7 @@ PASTA_DADOS = Path(os.getenv("CANAL_PASTA_DADOS") or RAIZ / "dados")
 PASTA_BRUTOS = PASTA_DADOS / "brutos"
 PASTA_CORTES = PASTA_DADOS / "cortes"
 PASTA_TRANSCRICOES = PASTA_DADOS / "transcricoes"
+PASTA_NARRACOES = PASTA_DADOS / "narracoes"
 PASTA_LOGS = PASTA_DADOS / "logs"
 ARQUIVO_BANCO = PASTA_DADOS / "canal.db"
 PASTA_PROMPTS = RAIZ / "prompts"
@@ -32,6 +33,22 @@ MODELO_CEREBRO = "claude-sonnet-5-5"   # escolha dos cortes e roteiro
 MODELO_RAPIDO = "claude-haiku-5-5"     # titulos, legendas e hashtags
 ESFORCO_CEREBRO = "medium"
 ESFORCO_RAPIDO = "low"
+
+# Ritmo da narracao, em caracteres por segundo (com espacos). Serve para o roteiro
+# caber no tempo do corte. Valores iniciais: conferir com a voz real da ElevenLabs.
+NARRACAO_CPS_IDEAL = 14.0      # ritmo confortavel
+NARRACAO_CPS_MAX = 16.0        # acima disso a voz teria que correr
+NARRACAO_SILENCIO_MAX_S = 6.0  # maior buraco sem voz aceito entre dois blocos
+GANCHO_MAX_S = 5.0             # duracao maxima do gancho no modo "original"
+CONTEXTO_ROTEIRO_FRASES = 6    # frases anteriores ao corte mostradas a IA
+
+# Voz da narracao (ElevenLabs). A voz e so uma configuracao: trocar e mudar o id.
+# George: voz pronta, grave, de contador de historias (vozes em portugues exigem plano pago).
+VOZ_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
+VOZ_MODELO = "eleven_multilingual_v2"
+VOZ_IDIOMA = "pt"
+PRECO_VOZ_USD_POR_CARACTERE = 0.00017   # estimativa (plano Starter); so para medir custo
+PAUSA_ENTRE_BLOCOS_S = 0.15             # respiro minimo entre dois blocos de voz
 
 # Preco em dolares por 1 milhao de tokens (entrada, saida). Serve so para estimar custo.
 PRECOS_USD_POR_MILHAO = {
@@ -51,7 +68,7 @@ CONFIG_PADRAO = {
 
 def garantir_pastas() -> None:
     """Cria as pastas de dados que ainda nao existem."""
-    for pasta in (PASTA_BRUTOS, PASTA_CORTES, PASTA_TRANSCRICOES, PASTA_LOGS):
+    for pasta in (PASTA_BRUTOS, PASTA_CORTES, PASTA_TRANSCRICOES, PASTA_NARRACOES, PASTA_LOGS):
         pasta.mkdir(parents=True, exist_ok=True)
 
 

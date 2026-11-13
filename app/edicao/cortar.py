@@ -17,6 +17,7 @@ from pathlib import Path
 
 from app import config
 from app.contratos import CorteProposto, Frase, Palavra
+from app.narracao.voz import Voz
 
 log = config.criar_log("edicao")
 
@@ -24,6 +25,10 @@ LARGURA, ALTURA = 1080, 1920
 PALAVRAS_POR_GRUPO = 3
 MAX_CARACTERES_GRUPO = 16   # em maiusculas, Arial 80 negrito: cerca de 16 letras por linha
 SEGURA_GRUPO_S = 0.35      # quanto tempo a legenda fica na tela depois da ultima palavra
+VOLUME_ORIGINAL_COM_NARRACAO = 0.12   # o som do video fica bem baixo enquanto o narrador fala
+PAUSA_APOS_GANCHO_S = 0.3             # respiro entre o gancho e o inicio da fala original
+RAMPA_VOLUME_S = 0.3                  # quanto tempo o som original leva para voltar ao normal
+CAUDA_APOS_NARRACAO_S = 0.4           # imagem parada depois da ultima palavra, se a voz passar do corte
 
 CABECALHO_ASS = f"""[Script Info]
 ScriptType: v4.00+
@@ -102,44 +107,118 @@ def gerar_ass(frases: list[Frase], inicio_corte: float, duracao: float) -> str:
 
 # Fundo: o proprio video ampliado, reduzido, borrado e ampliado de novo (borrar pequeno e rapido).
 # Frente: o video inteiro, ajustado a largura, centralizado.
-FILTRO = (
-    f"[0:v]split=2[fundo][frente];"
-    f"[fundo]scale={LARGURA}:{ALTURA}:force_original_aspect_ratio=increase,"
-    f"crop={LARGURA}:{ALTURA},scale=216:384,boxblur=6:2,scale={LARGURA}:{ALTURA},"
-    f"eq=brightness=-0.08[bg];"
-    f"[frente]scale={LARGURA}:{ALTURA}:force_original_aspect_ratio=decrease[fg];"
-    f"[bg][fg]overlay=(W-w)/2:(H-h)/2,subtitles=legenda.ass,format=yuv420p[saida]"
-)
+def _filtro_video(parado_antes: float = 0.0, parado_depois: float = 0.0) -> str:
+    """Filtro do video vertical com legenda. Os parametros seguram o primeiro/ultimo quadro."""
+    segurar = ""
+    if parado_antes > 0 or parado_depois > 0:
+        segurar = (f"tpad=start_mode=clone:start_duration={parado_antes:.3f}:"
+                   f"stop_mode=clone:stop_duration={parado_depois:.3f},")
+    return (
+        f"[0:v]{segurar}split=2[fundo][frente];"
+        f"[fundo]scale={LARGURA}:{ALTURA}:force_original_aspect_ratio=increase,"
+        f"crop={LARGURA}:{ALTURA},scale=216:384,boxblur=6:2,scale={LARGURA}:{ALTURA},"
+        f"eq=brightness=-0.08[bg];"
+        f"[frente]scale={LARGURA}:{ALTURA}:force_original_aspect_ratio=decrease[fg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,subtitles=legenda.ass,format=yuv420p[saida]"
+    )
+
+
+FILTRO = _filtro_video()
+
+
+def _filtro_audio(parado_antes: float, gancho_s: float) -> str:
+    """Mistura o som original (baixo) com a narracao, que entra como segunda entrada do ffmpeg.
+
+    gancho_s > 0: o som original fica baixo so durante o gancho e volta ao normal
+    no instante em que a fala original comeca. gancho_s == 0: baixo o corte inteiro.
+    """
+    if gancho_s > 0:
+        volta = gancho_s
+        volume = (f"volume='{VOLUME_ORIGINAL_COM_NARRACAO}+{1 - VOLUME_ORIGINAL_COM_NARRACAO}"
+                  f"*clip((t-{volta - RAMPA_VOLUME_S:.3f})/{RAMPA_VOLUME_S},0,1)':eval=frame")
+    else:
+        volume = f"volume={VOLUME_ORIGINAL_COM_NARRACAO}"
+    atraso = f"adelay={int(round(parado_antes * 1000))}:all=1," if parado_antes > 0 else ""
+    return (f"[0:a]{atraso}{volume}[orig];[1:a]volume=1.0[nar];"
+            f"[orig][nar]amix=inputs=2:duration=longest:normalize=0:dropout_transition=0[audio]")
+
+
+def _frases_da_voz(voz: Voz, origem: float) -> list[Frase]:
+    """Transforma as palavras da narracao em frases de legenda, no tempo do video original."""
+    frases = []
+    for numero, bloco in enumerate(voz.blocos):
+        palavras = [Palavra(p.texto, origem + p.inicio, origem + p.fim) for p in bloco.palavras]
+        if palavras:
+            frases.append(Frase(numero, palavras[0].inicio, palavras[-1].fim, bloco.texto, palavras))
+    return frases
 
 
 def gerar_corte(caminho_video: Path, corte: CorteProposto, frases_legenda: list[Frase],
-                destino: Path) -> Path:
-    """Gera o corte vertical com legenda e devolve o caminho do mp4."""
+                destino: Path, voz: Voz | None = None, arquivo_voz: Path | None = None) -> Path:
+    """Gera o corte vertical com legenda e devolve o caminho do mp4.
+
+    Sem `voz`: audio original e legenda da fala (traduzida, se preciso).
+    Com `voz` e modo "narrado": som original baixo, narracao por cima e legenda com
+    o texto da narracao.
+    Com `voz` e modo "original": o gancho toca antes da fala original, que comeca
+    depois dele, com o som original baixo so durante o gancho.
+    """
     caminho_video = Path(caminho_video).resolve()
     destino = Path(destino).resolve()
     destino.parent.mkdir(parents=True, exist_ok=True)
-    duracao = corte.fim - corte.inicio
+    inicio, duracao = corte.inicio, corte.fim - corte.inicio
     if duracao <= 0:
         raise ValueError("O corte tem duracao zero ou negativa.")
+
+    gancho_s = 0.0          # quanto tempo o gancho ocupa antes da fala original
+    parado_antes = 0.0      # parte do gancho em que a imagem fica parada (corte perto do inicio do video)
+    parado_depois = 0.0
+    legenda = frases_legenda
+    origem = inicio         # instante do video original que corresponde ao segundo 0 do corte pronto
+    if voz is not None and corte.modo == "original":
+        gancho_s = voz.duracao_s + PAUSA_APOS_GANCHO_S
+        puxa = min(gancho_s, inicio)           # quanto da imagem anterior ao corte da para usar
+        parado_antes = gancho_s - puxa
+        inicio -= puxa
+        duracao += puxa
+        origem = corte.inicio - gancho_s
+        legenda = _frases_da_voz(voz, origem) + frases_legenda
+        duracao_total = gancho_s + (corte.fim - corte.inicio)
+    elif voz is not None:
+        legenda = _frases_da_voz(voz, origem)
+        duracao_total = duracao
+        if voz.duracao_s > duracao:
+            parado_depois = voz.duracao_s - duracao + CAUDA_APOS_NARRACAO_S
+            duracao_total = duracao + parado_depois
+    else:
+        duracao_total = duracao
 
     # A legenda e o ffmpeg rodam dentro de uma pasta temporaria sem espacos no
     # caminho do arquivo .ass: o filtro de legenda do ffmpeg se confunde com
     # espacos e com "D:\" em caminhos do Windows.
     with tempfile.TemporaryDirectory(prefix="legenda_") as pasta:
         (Path(pasta) / "legenda.ass").write_text(
-            gerar_ass(frases_legenda, corte.inicio, duracao), encoding="utf-8")
-        comando = [
-            "ffmpeg", "-nostdin", "-y", "-v", "error",
-            "-ss", f"{corte.inicio:.3f}", "-t", f"{duracao:.3f}",
-            "-i", str(caminho_video),
-            "-filter_complex", FILTRO,
-            "-map", "[saida]", "-map", "0:a:0?",
+            gerar_ass(legenda, origem, duracao_total), encoding="utf-8")
+        comando = ["ffmpeg", "-nostdin", "-y", "-v", "error",
+                   "-ss", f"{inicio:.3f}", "-t", f"{duracao:.3f}", "-i", str(caminho_video)]
+        if voz is not None:
+            comando += ["-i", str(Path(arquivo_voz).resolve())]
+            filtro = _filtro_video(parado_antes, parado_depois) + ";" + _filtro_audio(parado_antes, gancho_s)
+            mapa_audio = "[audio]"
+        else:
+            filtro = FILTRO
+            mapa_audio = "0:a:0?"
+        comando += [
+            "-filter_complex", filtro,
+            "-map", "[saida]", "-map", mapa_audio,
+            "-t", f"{duracao_total:.3f}",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             str(destino),
         ]
-        log.info("Renderizando %.0f s de video em %dx%d...", duracao, LARGURA, ALTURA)
+        log.info("Renderizando %.0f s de video em %dx%d%s...", duracao_total, LARGURA, ALTURA,
+                 " com narracao" if voz is not None else "")
         comeco = time.time()
         resultado = subprocess.run(comando, cwd=pasta, capture_output=True, text=True,
                                    encoding="utf-8", errors="replace")

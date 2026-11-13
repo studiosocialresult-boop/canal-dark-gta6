@@ -81,3 +81,34 @@ class CorteProposto:
     @property
     def duracao_s(self) -> float:
         return self.fim - self.inicio
+
+
+@dataclass
+class BlocoRoteiro:
+    """Um trecho da narracao. A voz comeca a falar quando a frase ancora comeca no video."""
+    frase_inicio: int    # id da frase do corte em que o bloco e ancorado
+    texto: str
+
+
+@dataclass
+class Roteiro:
+    """O texto que o narrador fala em um corte.
+
+    modo "narrado": varios blocos, que cobrem o corte do comeco ao fim.
+    modo "original": no maximo um bloco, o gancho, falado logo antes do corte.
+    Lista vazia significa que o corte fica sem narracao.
+    """
+    modo: str
+    blocos: list[BlocoRoteiro] = field(default_factory=list)
+
+    @property
+    def texto(self) -> str:
+        return " ".join(b.texto for b in self.blocos)
+
+    def para_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False)
+
+    @classmethod
+    def de_json(cls, texto: str) -> "Roteiro":
+        dados = json.loads(texto)
+        return cls(modo=dados["modo"], blocos=[BlocoRoteiro(**b) for b in dados["blocos"]])
