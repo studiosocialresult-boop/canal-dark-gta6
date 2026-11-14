@@ -280,8 +280,10 @@ select.campo-select { padding: 8px 12px; border-radius: 11px; border: 1px solid 
 .fundo-modal.aberto { display: flex; }
 @keyframes aparece { from { opacity: 0; } }
 .modal { background: var(--cartao); border-radius: 22px; box-shadow: var(--sombra-forte); width: min(980px, 100%);
-         max-height: calc(100vh - 44px); overflow: hidden; display: grid; grid-template-columns: auto 1fr; animation: sobe .28s cubic-bezier(.2, .9, .3, 1.1); }
-.modal.estreito { width: min(520px, 100%); grid-template-columns: 1fr; }
+         max-height: calc(100vh - 44px); overflow: hidden; display: grid; grid-template-columns: auto 1fr;
+         grid-template-rows: minmax(0, 1fr); /* sem isso o conteudo passa da altura da janela e fica cortado, sem rolagem */
+         animation: sobe .28s cubic-bezier(.2, .9, .3, 1.1); }
+.modal.estreito { width: min(520px, 100%); grid-template-columns: 1fr; grid-template-rows: none; }
 @keyframes sobe { from { transform: translateY(24px) scale(.97); opacity: 0; } }
 .modal-video { background: #07070b; display: grid; place-items: center; padding: 18px; }
 .modal-video video { height: min(76vh, 760px); aspect-ratio: 9 / 16; border-radius: 16px; background: #000; display: block; }
@@ -369,7 +371,7 @@ input[type=range] { width: 100%; accent-color: var(--acento); }
   :root { --lateral: 0px; }
   .lateral { display: none; }
   .conteudo, .topo { padding-left: 16px; padding-right: 16px; }
-  .modal { grid-template-columns: 1fr; overflow-y: auto; }
+  .modal { grid-template-columns: 1fr; grid-template-rows: none; overflow-y: auto; }
   .modal-video video { height: 52vh; }
   .barra-massa { left: 50%; }
 }
@@ -400,7 +402,7 @@ input[type=range] { width: 100%; accent-color: var(--acento); }
 .opcao-layout svg.esquema { width: 100%; max-width: 120px; margin: 0 auto; display: block; }
 .opcao-layout b { font-size: 14px; display: block; }
 .opcao-layout small { color: var(--suave); line-height: 1.35; display: block; }
-.modal.largo { width: min(820px, 100%); grid-template-columns: 1fr; }
+.modal.largo { width: min(820px, 100%); grid-template-columns: 1fr; grid-template-rows: none; }
 
 /* ---------- assistente ---------- */
 

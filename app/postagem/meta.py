@@ -27,6 +27,8 @@ CAMPOS_PAGINA = ("id,name,access_token,picture{url},"
                  "instagram_business_account{id,username,profile_picture_url}")
 ESPERA_PROCESSAMENTO_S = 600
 INTERVALO_CONSULTA_S = 10
+TENTATIVAS_ENVIO_IG = 4       # o envio ao Instagram as vezes falha a toa; tenta de novo na hora
+ESPERA_ENTRE_ENVIOS_S = 30
 _dormir = time.sleep          # trocado nos testes
 
 
@@ -38,6 +40,16 @@ def _app() -> tuple[str, str]:
 
 
 def _erro_da_meta(resposta, contexto: str) -> ErroPostagem:
+    # O servidor de envio (rupload) responde num formato proprio: {"debug_info": {"type": ..., "message": ...}}.
+    depuracao = json_ou_vazio(resposta).get("debug_info") or {}
+    if depuracao.get("type") == "ProcessingFailedError":
+        # Visto em 14/11/2026: o MESMO arquivo ora passa, ora volta com este erro. E instabilidade da Meta,
+        # nao defeito do video; por isso conta como temporario (tenta de novo mais tarde).
+        return ErroPostagem(f"A Meta falhou ao receber o vídeo ({contexto}): instabilidade do lado dela. "
+                            "Tento de novo sozinho.", temporario=True)
+    if depuracao.get("message"):
+        return ErroPostagem(f"A Meta recusou ({contexto}): {str(depuracao['message'])[:220]}",
+                            temporario=bool(depuracao.get("retriable")))
     erro = json_ou_vazio(resposta).get("error", {}) or {}
     codigo = erro.get("code")
     mensagem = (erro.get("error_user_msg") or erro.get("message") or "").strip()
@@ -169,14 +181,23 @@ def _enviar_arquivo(url: str, token: str, arquivo: Path, rede: str) -> None:
 def publicar_instagram(credenciais: Credenciais, arquivo: Path, titulo: str, legenda: str,
                        opcoes: dict | None = None) -> Resultado:
     token, ig_id = credenciais["page_token"], credenciais["ig_id"]
-    criar = chamar("POST", f"{GRAPH}/{ig_id}/media", rede="instagram", data={
-        "media_type": "REELS", "upload_type": "resumable", "caption": legenda[:2200], "access_token": token})
-    dados = json_ou_vazio(criar)
-    if criar.status_code != 200 or "id" not in dados:
-        raise _erro_da_meta(criar, "criar o Reel")
-    container = dados["id"]
-    _enviar_arquivo(dados.get("uri") or f"{RUPLOAD}/ig-api-upload/{config.VERSAO_META}/{container}", token, arquivo,
-                    "instagram")
+    for tentativa in range(1, TENTATIVAS_ENVIO_IG + 1):
+        criar = chamar("POST", f"{GRAPH}/{ig_id}/media", rede="instagram", data={
+            "media_type": "REELS", "upload_type": "resumable", "caption": legenda[:2200], "access_token": token})
+        dados = json_ou_vazio(criar)
+        if criar.status_code != 200 or "id" not in dados:
+            raise _erro_da_meta(criar, "criar o Reel")
+        container = dados["id"]
+        try:
+            _enviar_arquivo(dados.get("uri") or f"{RUPLOAD}/ig-api-upload/{config.VERSAO_META}/{container}", token,
+                            arquivo, "instagram")
+            break
+        except ErroPostagem as erro:
+            # Falha passageira no envio: comeca de novo com um Reel novo (o anterior expira sozinho em 24 h).
+            if not erro.temporario or tentativa == TENTATIVAS_ENVIO_IG:
+                raise
+            log.info("Instagram: envio falhou (tentativa %d de %d): %s", tentativa, TENTATIVAS_ENVIO_IG, erro)
+            _dormir(ESPERA_ENTRE_ENVIOS_S)
 
     limite = time.monotonic() + ESPERA_PROCESSAMENTO_S
     while True:

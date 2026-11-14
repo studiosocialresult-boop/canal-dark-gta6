@@ -1191,6 +1191,12 @@ class TesteTemplates(unittest.TestCase):
         self.assertEqual(pagina.status_code, 200)
         self.assertEqual(self.cliente.get("/templates").status_code, 200)
 
+    def test_janela_do_corte_rola_quando_o_conteudo_passa_da_altura(self):
+        """Sem a linha de altura limitada, o conteudo extra ficava cortado e sem rolagem."""
+        css = (Path(__file__).parent.parent / "app" / "painel" / "estatico" / "painel.css").read_text(encoding="utf-8")
+        regra = css[css.index(".modal {"):css.index("@keyframes sobe")]
+        self.assertIn("grid-template-rows: minmax(0, 1fr)", regra)
+
     def test_arquivos_da_tela_sempre_conferem_se_mudaram(self):
         """Depois de uma atualizacao o navegador nao pode mostrar a tela antiga guardada."""
         r = self.cliente.get("/estatico/assistente.js")
@@ -1778,6 +1784,32 @@ class TesteMeta(unittest.TestCase):
         envio = rede.chamadas[1]
         self.assertEqual(envio[2]["headers"]["Authorization"], "OAuth PT")
         self.assertEqual((envio[2]["headers"]["offset"], envio[2]["headers"]["file_size"]), ("0", "4000"))
+
+    def test_reel_do_instagram_tenta_de_novo_quando_a_meta_falha_a_toa(self):
+        from app.postagem.redes import ErroPostagem
+        falha = Resposta(400, {"debug_info": {"retriable": False, "type": "ProcessingFailedError",
+                                              "message": "Request processing failed"}})
+        rede = RedeFalsa([
+            ("POST", "/IG1/media_publish", Resposta(200, {"id": "M9"})),
+            ("POST", "/IG1/media", [Resposta(200, {"id": f"C{n}", "uri": f"https://rupload.facebook.com/ig-api-upload/v27.0/C{n}"})
+                                    for n in (1, 2, 3)]),
+            ("POST", "rupload.facebook.com/ig-api-upload", [falha, falha, Resposta(200, {"success": True})]),
+            ("GET", "/C3", Resposta(200, {"status_code": "FINISHED"})),
+            ("GET", "/M9", Resposta(200, {"permalink": "https://www.instagram.com/reel/XYZ/"})),
+        ])
+        with rede.ativar():
+            r = self.meta.publicar_instagram(self.Credenciais({"ig_id": "IG1", "page_token": "PT"}), arquivo_de(500), "T", "L")
+        self.assertEqual(r.id_externo, "M9")
+        publicado = [c for c in rede.chamadas if "media_publish" in c[1]][0]
+        self.assertEqual(publicado[2]["data"]["creation_id"], "C3")     # publica o Reel que recebeu o arquivo
+        # falhando sempre: desiste, mas como erro temporario (o agendador tenta de novo mais tarde)
+        rede = RedeFalsa([("POST", "/IG1/media", Resposta(200, {"id": "C1", "uri": "https://rupload.facebook.com/ig-api-upload/v27.0/C1"})),
+                          ("POST", "rupload.facebook.com/ig-api-upload", falha)])
+        with rede.ativar():
+            with self.assertRaises(ErroPostagem) as erro:
+                self.meta.publicar_instagram(self.Credenciais({"ig_id": "IG1", "page_token": "PT"}), arquivo_de(500), "T", "L")
+        self.assertTrue(erro.exception.temporario)
+        self.assertEqual(sum(1 for c in rede.chamadas if "rupload" in c[1]), self.meta.TENTATIVAS_ENVIO_IG)
 
     def test_reel_do_facebook_e_token_invalido(self):
         from app.postagem.redes import ErroPostagem

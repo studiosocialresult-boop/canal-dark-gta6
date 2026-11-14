@@ -270,7 +270,7 @@
 
   // ---------- postar com template (frase do gancho + modelo, sem sair da janela) ----------
 
-  const modelo = { templates: null, templateId: null, corteId: null, opcoes: [], frase: "", gerandoFrases: false,
+  const modelo = { templates: null, templateId: null, corteId: null, frase: "", gerandoFrases: false,
                    enviando: false, saidas: [], relogio: null, relogioPrevia: null };
   try { modelo.templateId = Number(localStorage.getItem("canal_modelo_template")) || null; } catch (e) { /* sem memória do navegador: tudo bem */ }
   const caixaModelo = $("#corte-modelo");
@@ -337,7 +337,6 @@
       caixaModelo.innerHTML = '<p class="dica">Você ainda não tem template. <a href="/templates">Crie um em Templates</a> e ele aparece aqui.</p>';
       return;
     }
-    const opcoes = modelo.opcoes.map((f, i) => `<button type="button" class="botao pequeno" data-modelo-opcao="${i}" style="text-align:left;white-space:normal;height:auto;justify-content:flex-start">${esc(f)}</button>`).join("");
     const itens = modelo.saidas.map((s) => `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--linha)">${itemDoModelo(s)}</div>`).join("");
     caixaModelo.innerHTML = `
       <div style="display:flex;gap:14px;align-items:flex-start">
@@ -346,9 +345,9 @@
           <select class="campo-select" id="modelo-template" aria-label="Template">${modelo.templates.map((t) => `<option value="${t.id}" ${t.id === modelo.templateId ? "selected" : ""}>${esc(t.nome)} · ${esc(t.layout_nome)}</option>`).join("")}</select>
           <textarea class="campo" id="modelo-frase" maxlength="240" rows="2" placeholder="Frase do gancho: aparece escrita no vídeo">${esc(modelo.frase)}</textarea>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="botao pequeno" id="modelo-sugerir" ${modelo.gerandoFrases ? "disabled" : ""}>${modelo.gerandoFrases ? "Escrevendo…" : (modelo.opcoes.length ? "Outras frases" : "Gerar frases do gancho")}</button>
+            <button class="botao pequeno" id="modelo-sugerir" ${modelo.gerandoFrases ? "disabled" : ""}>${modelo.gerandoFrases ? "Escrevendo…" : (modelo.frase.trim() ? "Outra frase" : "Gerar frase do gancho")}</button>
             <button class="botao primario pequeno" id="modelo-gerar" ${modelo.enviando ? "disabled" : ""}>Gerar vídeo</button></div>
-          ${opcoes ? `<div style="display:grid;gap:6px">${opcoes}</div>` : '<span class="dica">A IA lê o título do corte e escreve a frase. Custa uma fração de centavo.</span>'}
+          <span class="dica">A IA lê o título do corte e escreve a frase. Custa uma fração de centavo. Você pode editar o texto.</span>
         </div></div>
       ${itens ? `<div style="margin-top:10px">${itens}</div>` : ""}`;
     previaDoModelo();
@@ -358,7 +357,7 @@
   function iniciarModelo(c, novoVideo) {
     if (novoVideo || modelo.corteId !== c.id) {
       clearTimeout(modelo.relogio);
-      Object.assign(modelo, { corteId: c.id, opcoes: [], frase: "", saidas: [], gerandoFrases: false, enviando: false });
+      Object.assign(modelo, { corteId: c.id, frase: "", saidas: [], gerandoFrases: false, enviando: false });
       if (c.midia) carregarSaidasDoModelo();
     }
     if (modelo.templates === null) carregarTemplatesDoModelo();
@@ -370,11 +369,8 @@
     const id = modelo.corteId;
     modelo.gerandoFrases = true; desenharModelo();
     try {
-      const r = await api(`/api/cortes/${id}/modelo/frases`, { metodo: "POST", corpo: { quantidade: 3 } });
-      if (modelo.corteId === id) {
-        modelo.opcoes = r.frases;
-        if (!modelo.frase.trim()) modelo.frase = r.frases[0] || "";
-      }
+      const r = await api(`/api/cortes/${id}/modelo/frases`, { metodo: "POST", corpo: { quantidade: 1 } });
+      if (modelo.corteId === id && r.frases[0]) modelo.frase = r.frases[0];
       Painel.atualizarGasto();
     } catch (erro) { aviso(erro.message, { tipo: "erro" }); }
     modelo.gerandoFrases = false;
@@ -409,7 +405,6 @@
     if (!alvo) return;
     if (alvo.id === "modelo-sugerir") gerarFrasesDoModelo();
     else if (alvo.id === "modelo-gerar") gerarVideoDoModelo(modelo.frase, modelo.templateId);
-    else if (alvo.dataset.modeloOpcao !== undefined) { modelo.frase = modelo.opcoes[Number(alvo.dataset.modeloOpcao)]; desenharModelo(); }
     else if (alvo.dataset.modeloAgendar) { const sid = Number(alvo.dataset.modeloAgendar); fechar(); Agendar.abrir({ saidas: [sid] }); }
     else if (alvo.dataset.modeloRefazer) {
       const s = modelo.saidas.find((x) => x.id === Number(alvo.dataset.modeloRefazer));
