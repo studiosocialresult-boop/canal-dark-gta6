@@ -1087,6 +1087,14 @@ class TesteTemplates(unittest.TestCase):
         self.assertEqual(pagina.status_code, 200)
         self.assertEqual(self.cliente.get("/templates").status_code, 200)
 
+    def test_arquivos_da_tela_sempre_conferem_se_mudaram(self):
+        """Depois de uma atualizacao o navegador nao pode mostrar a tela antiga guardada."""
+        r = self.cliente.get("/estatico/assistente.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["cache-control"], "no-cache")
+        igual = self.cliente.get("/estatico/assistente.js", headers={"If-None-Match": r.headers["etag"]})
+        self.assertEqual(igual.status_code, 304)                                     # sem mudanca, nada e baixado de novo
+
     def test_api_avatar_so_aceita_imagem(self):
         template_id = self.novo()
         ruim = self.cliente.post(f"/api/templates/{template_id}/avatar?nome=foto.png", content=b"isto nao e uma imagem")

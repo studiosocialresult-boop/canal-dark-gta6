@@ -82,6 +82,16 @@ CONFIGURACOES = [
 ]
 
 
+class _EstaticoSempreAtual(StaticFiles):
+    """Arquivos da tela (js, css) com `no-cache`: o navegador confere se mudou antes de usar a copia dele.
+    Sem isso, depois de uma atualizacao ele podia mostrar a tela antiga ate o usuario forcar o recarregamento."""
+
+    def file_response(self, *args, **kwargs):
+        resposta = super().file_response(*args, **kwargs)
+        resposta.headers["Cache-Control"] = "no-cache"
+        return resposta
+
+
 def criar_app() -> FastAPI:
     config.garantir_pastas()
     banco.criar_tabelas()
@@ -105,7 +115,7 @@ def criar_app() -> FastAPI:
         buscador.parar()
 
     app = FastAPI(title="Canal Dark", docs_url=None, redoc_url=None, lifespan=ciclo_de_vida)
-    app.mount("/estatico", StaticFiles(directory=PASTA / "estatico"), name="estatico")
+    app.mount("/estatico", _EstaticoSempreAtual(directory=PASTA / "estatico"), name="estatico")
     paginas = Jinja2Templates(directory=PASTA / "paginas")
 
     def contexto(request: Request, ativa: str, **extra) -> dict:
