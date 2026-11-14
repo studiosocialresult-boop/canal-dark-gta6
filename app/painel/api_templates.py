@@ -19,7 +19,7 @@ EXTENSOES_IMAGEM = {".png", ".jpg", ".jpeg", ".webp"}
 LIMITE_VIDEO = 2 * 1024 ** 3
 LIMITE_IMAGEM = 8 * 1024 ** 2
 FRASE_DE_EXEMPLO = "Sua frase aparece aqui"
-PASSOS = ["Perfil", "Zonas", "Frases", "Mídia", "Estilo", "Variações", "Gerar"]
+PASSOS = ["Perfil", "Zonas", "Mídia", "Frases", "Estilo", "Variações", "Gerar"]
 
 
 def _template_do_dono(template_id: int) -> dict:
@@ -176,7 +176,7 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
                                   "mostrar": modelos.LAYOUTS[t["layout"]]["mostra_perfil"]},
             "zonas_de_video": modelos.LAYOUTS[t["layout"]]["zonas_de_video"],
             "midias": [_midia_json(m) for m in repositorio.listar_midias(t["id"])],
-            "frases": repositorio.listar_frases(t["id"]),
+            "frases": [f for f in repositorio.listar_frases(t["id"]) if f["origem"] != "avulsa"],
             "resumo": _resumo(t["id"]),
             "contagem": repositorio.contagem_saidas(t["id"]),
         }
@@ -498,6 +498,84 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         if banco.item_na_fila(USUARIO, "lote", str(template_id)):
             raise HTTPException(409, "Este template está gerando vídeos agora. Espere terminar.")
         return {"ok": True, "apagados": repositorio.apagar_saidas(template_id)}
+
+    # ---------- janela do corte: "Postar com template" ----------
+
+    def _corte_do_dono(corte_id: int):
+        corte = banco.ler_corte(corte_id)
+        if corte is None or corte["usuario_id"] != USUARIO:
+            raise HTTPException(404, "Corte não encontrado.")
+        return corte
+
+    def _template_para_corte(template_id: int) -> dict:
+        t = _template_do_dono(template_id)
+        if t["layout"] == "cheio":
+            raise HTTPException(404, "Template não encontrado.")
+        return t
+
+    @app.post("/api/cortes/{corte_id}/modelo/frases")
+    def api_frases_do_corte(corte_id: int, dados: dict = Body(default={})):
+        """A frase do gancho: a IA le o titulo do corte (e o motivo da escolha) e escreve as opcoes."""
+        corte = _corte_do_dono(corte_id)
+        try:
+            quantidade = int(dados.get("quantidade", 3))
+            frases = modulo_frases.gerar_para_video(corte["titulo"], corte["motivo"], quantidade, usuario_id=USUARIO)
+        except (TypeError, ValueError) as erro:
+            raise HTTPException(400, str(erro))
+        except ia.ErroIA as erro:
+            raise HTTPException(502, str(erro))
+        return {"frases": frases}
+
+    @app.get("/api/cortes/{corte_id}/modelo/previa.jpg")
+    def api_previa_do_corte(corte_id: int, template_id: int, frase: str = ""):
+        """Como o corte fica neste template, sem gravar nada."""
+        corte = _corte_do_dono(corte_id)
+        t = _template_para_corte(template_id)
+        if not corte["caminho_arquivo"]:
+            raise HTTPException(404, "Este corte ainda não tem vídeo.")
+        provisoria = {"id": -corte_id, "template_id": t["id"], "origem": "corte", "corte_id": corte_id,
+                      "arquivo": None, "rotulo": corte["titulo"], "zona": 1, "ajuste": "preencher", "zoom": 1.0,
+                      "pos_x": 50.0, "pos_y": 50.0, "selecionada": 1, "com_legenda": 1, "avulsa": 1}
+        texto = " ".join(frase.split())[:300] or FRASE_DE_EXEMPLO
+        try:
+            imagem = renderizar.previa(t, texto, provisoria)
+        except renderizar.ErroRender as erro:
+            raise HTTPException(422, str(erro))
+        return FileResponse(imagem, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+    @app.post("/api/cortes/{corte_id}/modelo/gerar")
+    def api_gerar_do_corte(corte_id: int, dados: dict = Body(...)):
+        """Gera o video deste corte com a frase escolhida, no template escolhido (pela fila)."""
+        corte = _corte_do_dono(corte_id)
+        t = _template_para_corte(int(dados.get("template_id") or 0))
+        texto = " ".join(str(dados.get("frase", "")).split())
+        if not texto:
+            raise HTTPException(400, "Escreva a frase do gancho.")
+        if len(texto) > 240:
+            raise HTTPException(400, "A frase pode ter no máximo 240 caracteres.")
+        if not corte["caminho_arquivo"]:
+            raise HTTPException(400, "Este corte ainda não tem vídeo.")
+        saida, ja_existia = repositorio.criar_saida_avulsa(t["id"], corte_id, texto)
+        if saida["estado"] == "pronto":
+            return {"ok": True, "saida_id": saida["id"], "ja_existia": True}
+        if not banco.item_na_fila(USUARIO, "lote", str(t["id"])):
+            banco.enfileirar(USUARIO, "lote", str(t["id"]), f"Template {t['nome']}: {corte['titulo'][:40]}")
+        return {"ok": True, "saida_id": saida["id"], "ja_existia": ja_existia}
+
+    @app.get("/api/cortes/{corte_id}/modelo/saidas")
+    def api_saidas_do_corte(corte_id: int):
+        """Os videos ja feitos (ou sendo feitos) com este corte, em qualquer template."""
+        _corte_do_dono(corte_id)
+        saidas = repositorio.saidas_do_corte(corte_id, USUARIO)
+        # Um video pode ter ficado esperando se a fila acabou de fechar o template: poe de novo na fila.
+        for tid in {s["template_id"] for s in saidas if s["estado"] == "aguardando"}:
+            if not banco.item_na_fila(USUARIO, "lote", str(tid)):
+                nome = next(s["template"] for s in saidas if s["template_id"] == tid)
+                banco.enfileirar(USUARIO, "lote", str(tid), f"Template {nome}")
+        for s in saidas:
+            s["url"] = f"/api/templates/{s['template_id']}/saidas/{s['id']}.mp4" if s["estado"] == "pronto" else None
+        return {"saidas": [{k: s[k] for k in ("id", "template_id", "template", "frase", "estado", "erro", "url")}
+                           for s in saidas]}
 
     # ---------- perfis de pagina salvos ----------
 

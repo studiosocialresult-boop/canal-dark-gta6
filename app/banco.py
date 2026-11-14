@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS templates (
 
 -- Videos do template. origem: "corte", "upload" ou "perfil".
 -- com_legenda (so corte): 1 usa o corte pronto, com legenda e narracao; 0 usa o trecho do video original, limpo.
+-- avulsa: 1 = criada pela janela do corte ("Postar com template"); nao aparece no assistente nem entra no lote.
 -- zona: 1 (principal) ou 2 (segunda zona do layout viral).
 CREATE TABLE IF NOT EXISTS template_midias (
     id INTEGER PRIMARY KEY,
@@ -173,6 +174,7 @@ CREATE TABLE IF NOT EXISTS template_midias (
     pos_y REAL NOT NULL DEFAULT 50,
     selecionada INTEGER NOT NULL DEFAULT 1,
     com_legenda INTEGER NOT NULL DEFAULT 1,
+    avulsa INTEGER NOT NULL DEFAULT 0,
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -356,6 +358,8 @@ def criar_tabelas() -> None:
 def _garantir_colunas(conexao) -> None:
     """Bancos antigos nao tem colunas que foram acrescentadas depois. Acrescenta sem perder dados."""
     colunas_midias = {l["name"] for l in conexao.execute("PRAGMA table_info(template_midias)")}
+    if "avulsa" not in colunas_midias:
+        conexao.execute("ALTER TABLE template_midias ADD COLUMN avulsa INTEGER NOT NULL DEFAULT 0")
     if "com_legenda" not in colunas_midias:
         conexao.execute("ALTER TABLE template_midias ADD COLUMN com_legenda INTEGER NOT NULL DEFAULT 1")
     colunas = {l["name"] for l in conexao.execute("PRAGMA table_info(template_frases)")}

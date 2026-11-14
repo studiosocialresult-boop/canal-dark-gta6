@@ -101,7 +101,7 @@ def listar_midias(template_id: int) -> list[dict]:
         linhas = conexao.execute(
             "SELECT m.*, c.titulo AS corte_titulo, c.motivo AS corte_motivo, c.inicio_s, c.fim_s "
             "FROM template_midias m LEFT JOIN cortes c ON c.id = m.corte_id "
-            "WHERE m.template_id = ? ORDER BY m.zona, m.id", (template_id,)).fetchall()
+            "WHERE m.template_id = ? AND m.avulsa = 0 ORDER BY m.zona, m.id", (template_id,)).fetchall()
     return [dict(l) for l in linhas]
 
 
@@ -117,7 +117,7 @@ def adicionar_cortes(template_id: int, corte_ids: list[int], zona: int = 1) -> i
         for corte_id in corte_ids:
             corte = conexao.execute("SELECT id, titulo FROM cortes WHERE id = ?", (corte_id,)).fetchone()
             ja = conexao.execute(
-                "SELECT 1 FROM template_midias WHERE template_id = ? AND corte_id = ? AND zona = ?",
+                "SELECT 1 FROM template_midias WHERE template_id = ? AND corte_id = ? AND zona = ? AND avulsa = 0",
                 (template_id, corte_id, zona)).fetchone()
             if corte is None or ja:
                 continue
@@ -232,6 +232,61 @@ def atualizar_frase(frase_id: int, *, texto: str | None = None, selecionada: boo
 def excluir_frase(frase_id: int) -> None:
     with closing(banco.conectar()) as conexao, conexao:
         conexao.execute("DELETE FROM template_frases WHERE id = ?", (frase_id,))
+
+
+# ---------- video avulso: um corte + uma frase, feito pela janela do corte ----------
+
+def criar_saida_avulsa(template_id: int, corte_id: int, texto: str) -> tuple[dict, bool]:
+    """Prepara um video deste corte com esta frase, sem mexer no que o dono montou no assistente.
+
+    O corte e a frase ficam guardados no template como "avulsos" (escondidos do assistente e fora do
+    lote). Devolve (saida, ja_existia). Se a saida tinha falhado, volta para a fila.
+    """
+    texto = " ".join(str(texto).split())
+    if not texto:
+        raise ValueError("Escreva a frase do gancho.")
+    with closing(banco.conectar()) as conexao, conexao:
+        corte = conexao.execute("SELECT id, titulo FROM cortes WHERE id = ?", (corte_id,)).fetchone()
+        if corte is None:
+            raise ValueError("Corte nao encontrado.")
+        midia = conexao.execute(
+            "SELECT id FROM template_midias WHERE template_id = ? AND corte_id = ? AND zona = 1 AND avulsa = 1",
+            (template_id, corte_id)).fetchone()
+        midia_id = midia["id"] if midia else conexao.execute(
+            "INSERT INTO template_midias (template_id, origem, corte_id, rotulo, zona, selecionada, avulsa) "
+            "VALUES (?, 'corte', ?, ?, 1, 0, 1)", (template_id, corte_id, corte["titulo"])).lastrowid
+        frase = conexao.execute(
+            "SELECT id FROM template_frases WHERE template_id = ? AND midia_id = ? AND lower(texto) = lower(?)",
+            (template_id, midia_id, texto)).fetchone()
+        frase_id = frase["id"] if frase else conexao.execute(
+            "INSERT INTO template_frases (template_id, texto, origem, selecionada, midia_id) "
+            "VALUES (?, ?, 'avulsa', 0, ?)", (template_id, texto, midia_id)).lastrowid
+        saida = conexao.execute(
+            "SELECT id, estado FROM template_saidas WHERE template_id = ? AND midia_id = ? AND frase_id = ?",
+            (template_id, midia_id, frase_id)).fetchone()
+        if saida is None:
+            saida_id = conexao.execute(
+                "INSERT INTO template_saidas (template_id, midia_id, frase_id) VALUES (?, ?, ?)",
+                (template_id, midia_id, frase_id)).lastrowid
+            ja = False
+        else:
+            saida_id, ja = saida["id"], True
+            if saida["estado"] == "falhou":
+                conexao.execute("UPDATE template_saidas SET estado = 'aguardando', erro = NULL WHERE id = ?", (saida_id,))
+                ja = False
+    return ler_saida(saida_id), ja
+
+
+def saidas_do_corte(corte_id: int, usuario_id: int) -> list[dict]:
+    """Todos os videos feitos com este corte nos templates do usuario (mais novos primeiro)."""
+    with closing(banco.conectar()) as conexao:
+        return [dict(l) for l in conexao.execute(
+            "SELECT s.*, f.texto AS frase, t.nome AS template "
+            "FROM template_saidas s "
+            "JOIN template_midias m ON m.id = s.midia_id "
+            "JOIN template_frases f ON f.id = s.frase_id "
+            "JOIN templates t ON t.id = s.template_id "
+            "WHERE m.corte_id = ? AND t.usuario_id = ? ORDER BY s.id DESC", (corte_id, usuario_id))]
 
 
 # ---------- videos gerados ----------

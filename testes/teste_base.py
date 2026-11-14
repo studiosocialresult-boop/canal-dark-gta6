@@ -1070,6 +1070,71 @@ class TesteTemplates(unittest.TestCase):
         midia = self.repo.listar_midias(template_id)[0]
         self.assertEqual(self.renderizar.resolver_midia(midia), (original, 3.0, 6.0))
 
+    # ---------- janela do corte: postar com template ----------
+
+    def _corte_com_video(self, titulo="Corte para postar"):
+        import shutil
+        pasta = config.PASTA_CORTES / "teste_modelo"
+        pasta.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(pasta, ignore_errors=True))
+        arquivo = pasta / f"c{len(self.ids)}.mp4"
+        shutil.copy(Path(__file__).parent / "exemplo_zoo.mp4", arquivo)
+        video_id = banco.registrar_video(1, "youtube", f"mod{len(self.ids):08d}{id(self) % 1000}", "https://exemplo/modelo")
+        corte = banco.registrar_corte(1, video_id, CorteProposto(1, 2, 0.0, 10.0, 80, "Gancho forte.", titulo, "narrado"))
+        banco.atualizar_corte(corte, estado="aprovado", caminho_arquivo=config.caminho_relativo(arquivo))
+        return corte
+
+    def test_corte_gera_video_no_template_sem_bagunçar_o_assistente(self):
+        corte = self._corte_com_video()
+        template_id = self.novo("viral")
+        url = f"/api/cortes/{corte}/modelo/gerar"
+        r = self.cliente.post(url, json={"template_id": template_id, "frase": "  Olha   esse detalhe de GTA 6  "})
+        self.assertEqual(r.status_code, 200, r.text)
+        saida_id = r.json()["saida_id"]
+        self.assertFalse(r.json()["ja_existia"])
+        item = banco.item_na_fila(1, "lote", str(template_id))                         # entrou na fila
+        self.assertIsNotNone(item)
+        self.addCleanup(lambda: banco.atualizar_fila(item["id"], estado="pronto"))   # nao deixa item preso para outros testes
+        # o assistente do template nao ve o corte nem a frase, e o lote do template nao os inclui
+        dados = self.cliente.get(f"/api/templates/{template_id}").json()
+        self.assertEqual((dados["midias"], dados["frases"]), ([], []))
+        self.assertEqual(dados["resumo"]["total"], 0)
+        self.assertEqual(self.repo.gerar_saidas(template_id), (0, 0))
+        # a mesma frase de novo nao cria outro video
+        r2 = self.cliente.post(url, json={"template_id": template_id, "frase": "olha esse detalhe de gta 6"})
+        self.assertEqual(r2.json()["saida_id"], saida_id)
+        self.assertTrue(r2.json()["ja_existia"])
+        # o lote gera o video e ele aparece na lista do corte, pronto
+        self.lote.processar_template(template_id)
+        lista = self.cliente.get(f"/api/cortes/{corte}/modelo/saidas").json()["saidas"]
+        self.assertEqual([(s["frase"], s["estado"]) for s in lista], [("Olha esse detalhe de GTA 6", "pronto")])
+        self.assertEqual(self.cliente.get(lista[0]["url"]).status_code, 200)
+        # adicionar o mesmo corte no assistente continua possivel (o avulso nao conta como repetido)
+        self.assertEqual(self.repo.adicionar_cortes(template_id, [corte]), 1)
+
+    def test_corte_gera_frases_previa_e_recusa_pedidos_ruins(self):
+        from app import ia as modulo_ia
+        corte = self._corte_com_video("Rockstar confirma 30 FPS")
+        template_id = self.novo("post")
+        with mock.patch.object(self.frases, "gerar_para_video", return_value=["Uma", "Duas"]) as gera:
+            r = self.cliente.post(f"/api/cortes/{corte}/modelo/frases", json={"quantidade": 2})
+            self.assertEqual(r.json()["frases"], ["Uma", "Duas"])
+            self.assertEqual(gera.call_args.args[0], "Rockstar confirma 30 FPS")        # le o titulo do corte
+        with mock.patch.object(self.frases, "gerar_para_video", side_effect=modulo_ia.ErroIA("fora")):
+            self.assertEqual(self.cliente.post(f"/api/cortes/{corte}/modelo/frases", json={}).status_code, 502)
+        previa = self.cliente.get(f"/api/cortes/{corte}/modelo/previa.jpg", params={"template_id": template_id, "frase": "Teste"})
+        self.assertEqual(previa.status_code, 200)
+        self.assertEqual(previa.headers["content-type"], "image/jpeg")
+        self.assertEqual(self.cliente.get(f"/api/cortes/{corte}/modelo/saidas").json()["saidas"], [])   # previa nao grava nada
+        url = f"/api/cortes/{corte}/modelo/gerar"
+        self.assertEqual(self.cliente.post(url, json={"template_id": template_id, "frase": "  "}).status_code, 400)
+        self.assertEqual(self.cliente.post(url, json={"template_id": template_id, "frase": "x" * 300}).status_code, 400)
+        self.assertEqual(self.cliente.post(url, json={"template_id": 999999, "frase": "ok"}).status_code, 404)
+        self.assertEqual(self.cliente.post("/api/cortes/999999/modelo/gerar", json={"template_id": template_id, "frase": "ok"}).status_code, 404)
+        editor = self.repo.criar_template(1, "cheio", "Ajuste do editor")
+        self.ids.append(editor)
+        self.assertEqual(self.cliente.post(url, json={"template_id": editor, "frase": "ok"}).status_code, 404)  # so templates de verdade
+
     def test_midia_valida_ajustes(self):
         template_id = self.novo()
         midia = self.repo.adicionar_arquivo(template_id, "templates/x/v.mp4", "v")

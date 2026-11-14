@@ -265,7 +265,158 @@
         : "Sem narração. Narrar custa cerca de <b>US$ 0,10</b> de voz mais 1 centavo de IA.";
       botaoVoz.disabled = false; botaoVoz.lastElementChild.textContent = "Narrar";
     }
+    iniciarModelo(c, novoVideo);
   }
+
+  // ---------- postar com template (frase do gancho + modelo, sem sair da janela) ----------
+
+  const modelo = { templates: null, templateId: null, corteId: null, opcoes: [], frase: "", gerandoFrases: false,
+                   enviando: false, saidas: [], relogio: null, relogioPrevia: null };
+  try { modelo.templateId = Number(localStorage.getItem("canal_modelo_template")) || null; } catch (e) { /* sem memória do navegador: tudo bem */ }
+  const caixaModelo = $("#corte-modelo");
+
+  async function carregarTemplatesDoModelo() {
+    try {
+      const { templates } = await api("/api/templates");
+      modelo.templates = templates;
+    } catch (e) { modelo.templates = []; }
+    if (!modelo.templates.some((t) => t.id === modelo.templateId)) modelo.templateId = modelo.templates.length ? modelo.templates[0].id : null;
+    if (estado.aberto) desenharModelo();
+  }
+
+  async function carregarSaidasDoModelo() {
+    const id = modelo.corteId;
+    clearTimeout(modelo.relogio);
+    try {
+      const r = await api(`/api/cortes/${id}/modelo/saidas`);
+      if (modelo.corteId !== id) return;
+      modelo.saidas = r.saidas;
+    } catch (e) { return; }
+    desenharModelo();
+    if (modelo.saidas.some((s) => ["aguardando", "renderizando"].includes(s.estado)) && estado.aberto === id) {
+      modelo.relogio = setTimeout(carregarSaidasDoModelo, 3000);
+    }
+  }
+
+  function previaDoModelo() {
+    clearTimeout(modelo.relogioPrevia);
+    modelo.relogioPrevia = setTimeout(() => {
+      const imagem = $("#modelo-previa");
+      if (!imagem || !modelo.templateId) return;
+      const nova = new Image();
+      nova.onload = () => { imagem.src = nova.src; imagem.style.opacity = 1; };
+      nova.onerror = () => { imagem.style.opacity = .25; };
+      imagem.style.opacity = .5;
+      nova.src = `/api/cortes/${modelo.corteId}/modelo/previa.jpg?template_id=${modelo.templateId}&frase=${encodeURIComponent(modelo.frase)}`;
+    }, 350);
+  }
+
+  function itemDoModelo(s) {
+    const texto = `<div style="min-width:0;flex:1"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.frase)}">${esc(s.frase)}</b><span class="dica">${esc(s.template)}</span>`;
+    if (s.estado === "pronto") {
+      return `<video src="${s.url}" muted playsinline preload="metadata" controls style="width:64px;height:114px;border-radius:8px;background:#000;flex:none"></video>
+        ${texto}</div>
+        <button class="botao pequeno primario" data-modelo-agendar="${s.id}">${icone("calendario")}Agendar</button>
+        <a class="botao pequeno" href="${s.url}?baixar=1" download title="Baixar o vídeo">${icone("baixar")}</a>`;
+    }
+    if (s.estado === "falhou") {
+      return `${texto}<br><span class="dica" style="color:#e5484d">${esc(s.erro || "Não deu certo.")}</span></div>
+        <button class="botao pequeno" data-modelo-refazer="${s.id}">Tentar de novo</button>`;
+    }
+    return `${texto}<br><span class="dica">Gerando o vídeo… pode levar uns 15 segundos.</span></div>`;
+  }
+
+  function desenharModelo() {
+    const c = estado.cortes.find((x) => x.id === estado.aberto);
+    const bloco = $("#corte-modelo-bloco");
+    const pode = c && c.midia && !["falhou", "descartado"].includes(c.estado);
+    bloco.hidden = !pode;
+    if (!pode) return;
+    if (modelo.templates === null) { caixaModelo.innerHTML = '<span class="dica">Carregando seus templates…</span>'; return; }
+    if (!modelo.templates.length) {
+      caixaModelo.innerHTML = '<p class="dica">Você ainda não tem template. <a href="/templates">Crie um em Templates</a> e ele aparece aqui.</p>';
+      return;
+    }
+    const opcoes = modelo.opcoes.map((f, i) => `<button type="button" class="botao pequeno" data-modelo-opcao="${i}" style="text-align:left;white-space:normal;height:auto;justify-content:flex-start">${esc(f)}</button>`).join("");
+    const itens = modelo.saidas.map((s) => `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--linha)">${itemDoModelo(s)}</div>`).join("");
+    caixaModelo.innerHTML = `
+      <div style="display:flex;gap:14px;align-items:flex-start">
+        <img id="modelo-previa" width="108" height="192" alt="Prévia" style="border-radius:10px;background:#0002;object-fit:cover;flex:none;transition:opacity .2s">
+        <div style="flex:1;min-width:0;display:grid;gap:8px">
+          <select class="campo-select" id="modelo-template" aria-label="Template">${modelo.templates.map((t) => `<option value="${t.id}" ${t.id === modelo.templateId ? "selected" : ""}>${esc(t.nome)} · ${esc(t.layout_nome)}</option>`).join("")}</select>
+          <textarea class="campo" id="modelo-frase" maxlength="240" rows="2" placeholder="Frase do gancho: aparece escrita no vídeo">${esc(modelo.frase)}</textarea>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="botao pequeno" id="modelo-sugerir" ${modelo.gerandoFrases ? "disabled" : ""}>${modelo.gerandoFrases ? "Escrevendo…" : (modelo.opcoes.length ? "Outras frases" : "Gerar frases do gancho")}</button>
+            <button class="botao primario pequeno" id="modelo-gerar" ${modelo.enviando ? "disabled" : ""}>Gerar vídeo</button></div>
+          ${opcoes ? `<div style="display:grid;gap:6px">${opcoes}</div>` : '<span class="dica">A IA lê o título do corte e escreve a frase. Custa uma fração de centavo.</span>'}
+        </div></div>
+      ${itens ? `<div style="margin-top:10px">${itens}</div>` : ""}`;
+    previaDoModelo();
+  }
+
+  /** Chamada pelo preencherModal a cada corte aberto. */
+  function iniciarModelo(c, novoVideo) {
+    if (novoVideo || modelo.corteId !== c.id) {
+      clearTimeout(modelo.relogio);
+      Object.assign(modelo, { corteId: c.id, opcoes: [], frase: "", saidas: [], gerandoFrases: false, enviando: false });
+      if (c.midia) carregarSaidasDoModelo();
+    }
+    if (modelo.templates === null) carregarTemplatesDoModelo();
+    if (!caixaModelo.querySelector("#modelo-template") || novoVideo) desenharModelo();
+    else $("#corte-modelo-bloco").hidden = !(c.midia && !["falhou", "descartado"].includes(c.estado));
+  }
+
+  async function gerarFrasesDoModelo() {
+    const id = modelo.corteId;
+    modelo.gerandoFrases = true; desenharModelo();
+    try {
+      const r = await api(`/api/cortes/${id}/modelo/frases`, { metodo: "POST", corpo: { quantidade: 3 } });
+      if (modelo.corteId === id) {
+        modelo.opcoes = r.frases;
+        if (!modelo.frase.trim()) modelo.frase = r.frases[0] || "";
+      }
+      Painel.atualizarGasto();
+    } catch (erro) { aviso(erro.message, { tipo: "erro" }); }
+    modelo.gerandoFrases = false;
+    if (modelo.corteId === id) desenharModelo();
+  }
+
+  async function gerarVideoDoModelo(frase, templateId) {
+    const id = modelo.corteId;
+    if (!frase.trim()) { aviso("Escolha ou escreva a frase do gancho primeiro.", { tipo: "erro" }); return; }
+    modelo.enviando = true; desenharModelo();
+    try {
+      const r = await api(`/api/cortes/${id}/modelo/gerar`, { metodo: "POST", corpo: { template_id: templateId, frase } });
+      aviso(r.ja_existia ? "Esse vídeo já existe, está na lista abaixo." : "Gerando o vídeo. Ele aparece aqui embaixo.");
+    } catch (erro) { aviso(erro.message, { tipo: "erro" }); }
+    modelo.enviando = false;
+    if (modelo.corteId === id) await carregarSaidasDoModelo();
+  }
+
+  caixaModelo.addEventListener("change", (e) => {
+    if (e.target.id !== "modelo-template") return;
+    modelo.templateId = Number(e.target.value);
+    try { localStorage.setItem("canal_modelo_template", String(modelo.templateId)); } catch (x) { /* ok */ }
+    previaDoModelo();
+  });
+  caixaModelo.addEventListener("input", (e) => {
+    if (e.target.id !== "modelo-frase") return;
+    modelo.frase = e.target.value;
+    previaDoModelo();
+  });
+  caixaModelo.addEventListener("click", (e) => {
+    const alvo = e.target.closest("button");
+    if (!alvo) return;
+    if (alvo.id === "modelo-sugerir") gerarFrasesDoModelo();
+    else if (alvo.id === "modelo-gerar") gerarVideoDoModelo(modelo.frase, modelo.templateId);
+    else if (alvo.dataset.modeloOpcao !== undefined) { modelo.frase = modelo.opcoes[Number(alvo.dataset.modeloOpcao)]; desenharModelo(); }
+    else if (alvo.dataset.modeloAgendar) { const sid = Number(alvo.dataset.modeloAgendar); fechar(); Agendar.abrir({ saidas: [sid] }); }
+    else if (alvo.dataset.modeloRefazer) {
+      const s = modelo.saidas.find((x) => x.id === Number(alvo.dataset.modeloRefazer));
+      if (s) gerarVideoDoModelo(s.frase, s.template_id);
+    }
+  });
+  document.addEventListener("fila:terminou", () => { if (estado.aberto && modelo.corteId === estado.aberto) carregarSaidasDoModelo(); });
 
   async function decidir(novo) {
     const c = estado.cortes.find((x) => x.id === estado.aberto);
