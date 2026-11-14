@@ -23,7 +23,11 @@ from app.multiplicador.modelos import ALTURA, LARGURA
 
 log = config.criar_log("render")
 FPS = 30
-VERSAO_PREVIA = 2      # sobe quando o desenho da previa muda, para nao mostrar quadros antigos do cache
+VERSAO_PREVIA = 3      # sobe quando o desenho da previa muda, para nao mostrar quadros antigos do cache
+# No corte pronto (1080x1920), a parte que importa vai da imagem do video (que comeca em ~34% da altura)
+# ate a legenda (que termina em ~78%). Quando a zona e mais baixa que o quadro e o dono nao mexeu na
+# posicao, o recorte mira o centro dessa faixa em vez do centro do quadro, para a legenda nao ficar de fora.
+FOCO_CORTE_PRONTO = 0.56
 
 
 class ErroRender(Exception):
@@ -33,11 +37,19 @@ class ErroRender(Exception):
 # ---------- origem dos videos ----------
 
 def resolver_midia(midia: dict) -> tuple[Path, float | None, float | None]:
-    """Devolve (arquivo, inicio_s, duracao_s). Corte: so o trecho, do video original e sem legenda."""
+    """Devolve (arquivo, inicio_s, duracao_s).
+
+    Corte com legenda (o padrao): o corte pronto, com a legenda e a narracao que o pipeline fez.
+    Corte sem legenda, ou corte pronto que sumiu do disco: so o trecho do video original, limpo.
+    """
     if midia["origem"] == "corte":
         corte = banco.ler_corte(midia["corte_id"])
         if corte is None:
             raise ErroRender("O corte usado como midia nao existe mais.")
+        if midia.get("com_legenda", 1) and corte["caminho_arquivo"]:
+            pronto = config.caminho_absoluto(corte["caminho_arquivo"])
+            if pronto.exists():
+                return pronto, None, None
         video = banco.ler_video(corte["video_id"])
         arquivo = config.caminho_absoluto(video["caminho_arquivo"] or "")
         if not arquivo.exists():
@@ -90,8 +102,12 @@ def _filtro_zona(entrada: int, saida: str, zona: tuple, midia: dict | None, fund
                 f"[b{entrada}]scale={w}:{h}:force_original_aspect_ratio=decrease[c{entrada}];"
                 f"[f{entrada}][c{entrada}]overlay=(W-w)/2:(H-h)/2,setsar=1[{saida}]")
     ampliar = f"scale=iw*{zoom:.3f}:ih*{zoom:.3f}," if zoom > 1.001 else ""
+    if midia.get("_corte_pronto") and abs(py - 0.5) < 1e-6:
+        y = f"max(0,min(ih-{h},ih*{FOCO_CORTE_PRONTO}-{h}/2))"
+    else:
+        y = f"(ih-{h})*{py:.4f}"
     return (f"[{entrada}:v]scale={w}:{h}:force_original_aspect_ratio=increase,{ampliar}"
-            f"crop={w}:{h}:x='(iw-{w})*{px:.4f}':y='(ih-{h})*{py:.4f}',setsar=1[{saida}]")
+            f"crop={w}:{h}:x='(iw-{w})*{px:.4f}':y='{y}',setsar=1[{saida}]")
 
 
 def montar_comando(*, overlay: Path, zonas: dict, fontes: list, ajustes: list, fundo: str,
@@ -153,15 +169,23 @@ def _preparar(template: dict, frase: str, midias: list[dict]):
     principal = midias[0]
     arquivo, inicio, dur = resolver_midia(principal)
     duracao = dur if dur else duracao_do_arquivo(arquivo)
-    fontes, ajustes = [(arquivo, inicio, dur)], [principal]
+    fontes, ajustes = [(arquivo, inicio, dur)], [_marcar_corte_pronto(principal, inicio)]
     if "video2" in zonas:
         if len(midias) > 1:
-            fontes.append(resolver_midia(midias[1]))
-            ajustes.append(midias[1])
+            segunda = resolver_midia(midias[1])
+            fontes.append(segunda)
+            ajustes.append(_marcar_corte_pronto(midias[1], segunda[1]))
         else:
             fontes.append((arquivo, inicio, dur))        # mesmo video, so desfocado
             ajustes.append(None)
     return imagem, zonas, fontes, ajustes, duracao, cfg["video"]["fundo"]
+
+
+def _marcar_corte_pronto(midia: dict, inicio: float | None) -> dict:
+    """Corte que entrou inteiro (o corte pronto, com legenda): o recorte mira a faixa da legenda."""
+    if midia.get("origem") == "corte" and inicio is None:
+        return {**midia, "_corte_pronto": True}
+    return midia
 
 
 def _midias_do_template(template_id: int, principal: dict) -> list[dict]:
@@ -203,7 +227,7 @@ def previa(template: dict, frase: str, midia: dict | None) -> Path:
     pasta.mkdir(parents=True, exist_ok=True)
     extras = ""
     if midia:
-        extras = repr(sorted((k, v) for k, v in midia.items() if k in ("id", "zoom", "pos_x", "pos_y", "ajuste", "arquivo", "corte_id")))
+        extras = repr(sorted((k, v) for k, v in midia.items() if k in ("id", "zoom", "pos_x", "pos_y", "ajuste", "arquivo", "corte_id", "com_legenda")))
         extras += repr([(m["id"], m["zoom"], m["pos_x"], m["pos_y"], m["ajuste"]) for m in repositorio.listar_midias(template["id"]) if m["zona"] == 2])
     avatar = _avatar(template["config"])
     marca_avatar = avatar.stat().st_mtime if avatar and avatar.exists() else 0

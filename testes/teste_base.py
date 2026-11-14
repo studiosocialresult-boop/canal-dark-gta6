@@ -966,6 +966,8 @@ class TesteTemplates(unittest.TestCase):
         banco._garantir_colunas(conexao)                                             # pode rodar de novo
         linha = conexao.execute("SELECT texto, midia_id FROM template_frases").fetchone()
         self.assertEqual((linha["texto"], linha["midia_id"]), ("Antiga", None))      # antiga vale para todos
+        colunas = {l["name"]: l["dflt_value"] for l in conexao.execute("PRAGMA table_info(template_midias)")}
+        self.assertEqual(colunas.get("com_legenda"), "1")                            # corte antigo passa a vir com legenda
 
     def test_gerar_para_video_usa_titulo_e_motivo(self):
         cliente = ClienteFalso([resposta_falsa({"frases": ["So uma"]}),
@@ -1030,6 +1032,43 @@ class TesteTemplates(unittest.TestCase):
         self.assertEqual(self.cliente.post(url, json={"textos": ["Outra"], "midia_id": estranha}).status_code, 404)
         dados = self.cliente.get(f"/api/templates/{template_id}").json()
         self.assertEqual(dados["frases"][0]["midia_id"], midia)
+
+    def test_corte_entra_com_legenda_e_narracao_e_pode_sair_limpo(self):
+        import shutil
+        exemplo = Path(__file__).parent / "exemplo_zoo.mp4"
+        pasta = config.PASTA_CORTES / "teste_legenda"
+        pasta.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(pasta, ignore_errors=True))
+        original, pronto = pasta / "original.mp4", pasta / "corte_pronto.mp4"
+        shutil.copy(exemplo, original)
+        shutil.copy(exemplo, pronto)
+        video_id = banco.registrar_video(1, "youtube", f"leg{len(self.ids):08d}", "https://exemplo/legenda")
+        banco.atualizar_video(video_id, caminho_arquivo=config.caminho_relativo(original))
+        corte = banco.registrar_corte(1, video_id, CorteProposto(1, 2, 3.0, 9.0, 80, "m", "Corte com legenda", "narrado"))
+        banco.atualizar_corte(corte, caminho_arquivo=config.caminho_relativo(pronto))
+        template_id = self.novo()
+        self.assertEqual(self.repo.adicionar_cortes(template_id, [corte]), 1)
+        midia = self.repo.listar_midias(template_id)[0]
+        self.assertEqual(midia["com_legenda"], 1)                                    # padrao: o corte pronto
+        self.assertEqual(self.renderizar.resolver_midia(midia), (pronto, None, None))
+        # desligado: so o trecho do original, sem legenda
+        self.assertEqual(self.cliente.put(f"/api/templates/{template_id}/midias/{midia['id']}",
+                                          json={"com_legenda": False}).status_code, 200)
+        midia = self.repo.listar_midias(template_id)[0]
+        self.assertEqual(self.renderizar.resolver_midia(midia), (original, 3.0, 6.0))
+        # o recorte do corte pronto mira a faixa da legenda; se o dono mexer na posicao, vale a dele
+        zona = (0, 0, 1080, 835)
+        pronto_marcado = self.renderizar._marcar_corte_pronto({**midia, "pos_y": 50}, None)
+        self.assertIn(f"ih*{self.renderizar.FOCO_CORTE_PRONTO}", self.renderizar._filtro_zona(0, "z", zona, pronto_marcado, "desfocado"))
+        movido = {**pronto_marcado, "pos_y": 80}
+        self.assertIn("(ih-835)*0.8000", self.renderizar._filtro_zona(0, "z", zona, movido, "desfocado"))
+        limpo = self.renderizar._marcar_corte_pronto({**midia, "pos_y": 50}, 3.0)          # trecho do original
+        self.assertIn("(ih-835)*0.5000", self.renderizar._filtro_zona(0, "z", zona, limpo, "desfocado"))
+        # ligado, mas o corte pronto sumiu do disco: usa o original em vez de quebrar
+        self.repo.atualizar_midia(midia["id"], com_legenda=True)
+        pronto.unlink()
+        midia = self.repo.listar_midias(template_id)[0]
+        self.assertEqual(self.renderizar.resolver_midia(midia), (original, 3.0, 6.0))
 
     def test_midia_valida_ajustes(self):
         template_id = self.novo()

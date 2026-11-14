@@ -189,6 +189,11 @@
       case "tirar-midia": if (midiaEmEdicao === Number(dado.id)) midiaEmEdicao = null; e.stopPropagation();
         await acao(() => api(`/api/templates/${ID}/midias/${dado.id}`, { metodo: "DELETE" }), true); break;
       case "ajuste": await mudarAjuste(dado.valor); break;
+      case "com-legenda": {
+        const m = T.midias.find((x) => x.id === midiaEmEdicao);
+        if (m) await acao(() => api(`/api/templates/${ID}/midias/${m.id}`, { metodo: "PUT", corpo: { com_legenda: !m.com_legenda } }), true);
+        break;
+      }
       case "marcar-midia": await acao(() => api(`/api/templates/${ID}/midias/${dado.id}`, { metodo: "PUT", corpo: { selecionada: !T.midias.find((m) => m.id === Number(dado.id)).selecionada } }), true); break;
       case "marcar-frase": await acao(() => api(`/api/templates/${ID}/frases/${dado.id}`, { metodo: "PUT", corpo: { selecionada: !T.frases.find((f) => f.id === Number(dado.id)).selecionada } }), true); break;
       case "todas-midias": await acao(() => api(`/api/templates/${ID}/midias`, { metodo: "PUT", corpo: { selecionada: dado.valor === "1" } }), true); break;
@@ -403,6 +408,8 @@
     const meus = zona1.length ? `<div class="miniaturas">${zona1.map((m) => miniaturaMidia(m)).join("")}</div>`
       : '<div class="vazio-pequeno">Nenhum vídeo ainda. Escolha cortes ou envie arquivos.</div>';
     const ajuste = editando ? `<div class="secao"><h3>Ajustar: ${esc(editando.rotulo)}</h3>
+        ${editando.origem === "corte" ? `<label class="interruptor"><input type="checkbox" data-acao="com-legenda" ${editando.com_legenda ? "checked" : ""}>Usar o corte pronto, com a legenda e a narração</label>
+        <p class="dica" style="margin:0">${editando.com_legenda ? "O vídeo sai como o corte ficou: legenda queimada e narração." : "Sai só a imagem do vídeo original, sem legenda e com o som original."}</p>` : ""}
         <div class="segmentado"><button type="button" data-acao="ajuste" data-valor="preencher" class="${editando.ajuste === "preencher" ? "ativo" : ""}">Preencher a zona</button>
           <button type="button" data-acao="ajuste" data-valor="caber" class="${editando.ajuste === "caber" ? "ativo" : ""}">Caber inteiro</button></div>
         ${editando.ajuste === "preencher" ? `<div class="linha-campos">

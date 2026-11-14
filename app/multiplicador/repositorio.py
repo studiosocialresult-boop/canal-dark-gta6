@@ -10,7 +10,7 @@ from contextlib import closing
 from app import banco, config
 from app.multiplicador import modelos
 
-CAMPOS_MIDIA = {"zona", "ajuste", "zoom", "pos_x", "pos_y", "selecionada", "rotulo"}
+CAMPOS_MIDIA = {"zona", "ajuste", "zoom", "pos_x", "pos_y", "selecionada", "rotulo", "com_legenda"}
 AJUSTES = ("preencher", "caber")
 
 
@@ -111,7 +111,7 @@ def ler_midia(midia_id: int) -> dict | None:
 
 
 def adicionar_cortes(template_id: int, corte_ids: list[int], zona: int = 1) -> int:
-    """Poe cortes (o trecho do video original, sem legenda) como midias. Devolve quantos entraram."""
+    """Poe cortes como midias (por padrao, o corte pronto: com legenda e narracao). Devolve quantos entraram."""
     entrou = 0
     with closing(banco.conectar()) as conexao, conexao:
         for corte_id in corte_ids:
@@ -169,8 +169,9 @@ def atualizar_midia(midia_id: int, **campos) -> None:
     for chave in ("pos_x", "pos_y"):
         if chave in campos:
             campos[chave] = min(max(float(campos[chave]), 0.0), 100.0)
-    if "selecionada" in campos:
-        campos["selecionada"] = 1 if campos["selecionada"] else 0
+    for chave in ("selecionada", "com_legenda"):
+        if chave in campos:
+            campos[chave] = 1 if campos[chave] else 0
     with closing(banco.conectar()) as conexao, conexao:
         conexao.execute(
             f"UPDATE template_midias SET {', '.join(f'{k} = ?' for k in campos)} WHERE id = ?",
