@@ -31,7 +31,9 @@ _dormir = time.sleep
 
 MENSAGENS = {
     "unaudited_client_can_only_post_to_private_accounts":
-        "O app ainda não foi auditado pelo TikTok: só dá para postar em conta privada, como 'Somente eu'.",
+        "O app ainda não foi auditado pelo TikTok: enquanto isso, a própria conta do TikTok precisa estar "
+        "privada. No celular: Perfil → ☰ → Configurações e privacidade → Privacidade → ligar 'Conta privada'. "
+        "Depois é só clicar em Tentar de novo.",
     "privacy_level_option_mismatch": "Essa privacidade não está disponível para esta conta do TikTok.",
     "spam_risk_too_many_posts": "O TikTok limitou os posts desta conta por hoje. Tente amanhã.",
     "spam_risk_user_banned_from_posting": "O TikTok bloqueou esta conta de postar.",
