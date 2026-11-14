@@ -55,9 +55,18 @@ CONFIGURACOES = [
     ("duracao_max_s", "Duração máxima do corte", "Cortes mais longos que isso são recusados.", 15, 180, "s"),
     ("nota_minima_narracao", "Nota mínima para narrar sozinho",
      "Só cortes com nota igual ou maior ganham narração automática (a voz custa dinheiro).", 0, 100, ""),
-    ("posts_por_dia", "Posts por dia (contas novas)", "Ritmo inicial de cada conta conectada. Dá para mudar conta por conta.", 1, 24, ""),
+    ("posts_dia_youtube", "Posts por dia no YouTube (contas novas)",
+     "Ritmo inicial de cada canal conectado. Recomendado: 1 a 2 nas 2 primeiras semanas, depois 3 a 6. "
+     "Dá para mudar conta por conta na tela Contas.", 1, 12, ""),
+    ("posts_dia_instagram", "Posts por dia no Instagram (contas novas)", "Recomendado: 3 a 5 por dia.", 1, 12, ""),
+    ("posts_dia_facebook", "Posts por dia no Facebook (contas novas)", "Recomendado: 3 a 5 por dia.", 1, 12, ""),
+    ("posts_dia_tiktok", "Posts por dia no TikTok (contas novas)", "Recomendado: 3 a 5 por dia.", 1, 12, ""),
+    ("intervalo_minimo_min", "Intervalo mínimo entre posts",
+     "Tempo mínimo entre dois posts da mesma conta. Posts colados disputam o mesmo público e derrubam o alcance. "
+     "O que não couber no dia vai para o dia seguinte.", 30, 360, " min"),
     ("janela_inicio", "Começa a postar às", "Primeira hora do dia em que a agenda coloca posts (horário de Brasília).", 0, 23, "h"),
-    ("janela_fim", "Para de postar às", "Depois desta hora a agenda não coloca posts.", 1, 24, "h"),
+    ("janela_fim", "Para de postar às",
+     "Depois desta hora a agenda não coloca posts. Das 11h às 23h pega o almoço, o fim da tarde e o pico da noite.", 1, 24, "h"),
     ("modo_automatico", "Modo 100% automático",
      "Desligado: só vai para as redes o que você aprovar. Ligado: cortes com nota alta são aprovados e agendados sozinhos "
      "(menos no TikTok, que exige sua confirmação em cada post).", 0, 1, ""),

@@ -5,7 +5,8 @@ Regras:
   O modo automatico (desligado por padrao) aprova e agenda sozinho os cortes com nota alta.
 - O mesmo conteudo nunca vai duas vezes para a mesma conta, mesmo com frase ou layout diferente
   (chave_video). Variacoes de um mesmo corte sao espalhadas entre contas diferentes.
-- Cada conta posta no seu ritmo (posts por dia), dentro da janela de horario, espaçado por igual.
+- Cada conta posta no seu ritmo (posts por dia), dentro da janela de horario, espaçado por igual e
+  nunca com menos que o intervalo minimo entre dois posts da mesma conta (o que nao couber vai para o dia seguinte).
 - Falha temporaria (rede fora do ar, limite) tenta de novo mais tarde; acesso vencido marca a conta
   para conectar de novo; erro definitivo marca a publicacao como falha, com o motivo.
 - TikTok nunca e agendado pelo modo automatico: as regras dele exigem escolha e confirmacao do dono.
@@ -72,13 +73,15 @@ def proximos_horarios(conta: dict, quantidade: int, usuario_id: int, reservados:
     if not 0 <= inicio_h < fim_h <= 24:
         inicio_h, fim_h = 9, 22
     passo = timedelta(minutes=(fim_h - inicio_h) * 60 / max(1, conta["posts_por_dia"]))
+    # distancia minima de qualquer outro post da conta: meio passo ou o intervalo minimo, o que for maior
+    folga = max(passo / 2, timedelta(minutes=banco.ler_config(usuario_id, "intervalo_minimo_min")))
     ocupados = [momento(t) for t in contas.horarios_ocupados(conta["id"])] + [momento(t) for t in (reservados or set())]
     minimo = (depois_de or agora()) + timedelta(minutes=MARGEM_MIN)
     livres = []
     dia = minimo.astimezone(_fuso()).date()
     for _ in range(DIAS_A_FRENTE):
         for horario in horarios_do_dia(dia, conta["posts_por_dia"], inicio_h, fim_h):
-            if horario < minimo or any(abs(horario - o) < passo / 2 for o in ocupados):
+            if horario < minimo or any(abs(horario - o) < folga for o in ocupados):
                 continue
             livres.append(horario)
             ocupados.append(horario)

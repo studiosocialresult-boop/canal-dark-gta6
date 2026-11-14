@@ -71,9 +71,15 @@ CONFIG_PADRAO = {
     "duracao_max_s": 75,
     "nota_minima_narracao": 70,
     # Postagem
-    "posts_por_dia": 4,            # ritmo padrao de cada conta nova
-    "janela_inicio": 9,            # primeira hora do dia em que posta (fuso local)
-    "janela_fim": 22,              # ultima hora (exclusiva)
+    # Ritmo inicial de cada conta nova, por rede (posts por dia). Somados dao ~13 posts/dia, dentro da
+    # meta de 10 a 20, sem saturar nenhuma conta (acima de ~6 por dia na mesma conta os videos disputam publico).
+    "posts_dia_youtube": 4,
+    "posts_dia_instagram": 3,
+    "posts_dia_facebook": 3,
+    "posts_dia_tiktok": 3,
+    "intervalo_minimo_min": 120,   # minutos minimos entre dois posts da mesma conta
+    "janela_inicio": 11,           # primeira hora do dia em que posta (fuso local): pega o almoco...
+    "janela_fim": 23,              # ...o fim de tarde e o pico da noite (ultima hora, exclusiva)
     "modo_automatico": 0,          # 1: aprova e agenda sozinho os cortes com nota alta (desligado por padrao)
     "nota_minima_automatico": 80,  # nota minima para o modo automatico aprovar um corte
     # Busca diaria

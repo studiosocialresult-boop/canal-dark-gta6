@@ -116,8 +116,8 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
             novas = modulo.concluir_login(code, retorno(servico))
         except ErroPostagem as erro:
             return RedirectResponse(f"/contas?erro={quote(str(erro))}")
-        ritmo = banco.ler_config(USUARIO, "posts_por_dia")
         for c in novas:
+            ritmo = banco.ler_config(USUARIO, f"posts_dia_{c['rede']}")
             contas.salvar_conta(USUARIO, c["rede"], c["id_externo"], c["nome"], c.get("foto"), c["credenciais"], ritmo)
         return RedirectResponse(f"/contas?conectadas={len(novas)}")
 

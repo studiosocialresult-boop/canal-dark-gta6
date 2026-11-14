@@ -1697,6 +1697,20 @@ class TesteAgendador(unittest.TestCase):
         depois = self.ag.proximos_horarios(conta, 1, 1)
         self.assertEqual(depois[0], primeiros[1])
 
+    def test_intervalo_minimo_entre_posts_da_mesma_conta(self):
+        # 8 por dia das 11h as 23h daria um post a cada 90 min; o intervalo minimo (120 min) segura
+        self.contas.atualizar_conta(self.yt, posts_por_dia=8)
+        horarios = sorted(self.ag.proximos_horarios(self.contas.ler_conta(self.yt), 10, 1))
+        self.assertEqual(len(horarios), 10)
+        self.assertTrue(all((b - a).total_seconds() >= 120 * 60 for a, b in zip(horarios, horarios[1:])))
+        locais = [h.astimezone(self.ag._fuso()) for h in horarios]
+        self.assertTrue(all(11 <= h.hour < 23 for h in locais))
+
+    def test_ritmo_padrao_por_rede(self):
+        self.assertEqual([banco.ler_config(1, f"posts_dia_{r}") for r in ("youtube", "instagram", "facebook", "tiktok")],
+                         [4, 3, 3, 3])
+        self.assertEqual(banco.ler_config(1, "intervalo_minimo_min"), 120)
+
     def test_so_corte_aprovado_e_agendado(self):
         nao_aprovado = self.novo_corte("renderizado")
         with self.assertRaises(self.ag.ErroAgenda):
