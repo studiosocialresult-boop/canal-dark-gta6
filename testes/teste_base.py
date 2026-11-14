@@ -1600,6 +1600,36 @@ class TesteMeta(unittest.TestCase):
         self.assertEqual(contas[1]["credenciais"], {"ig_id": "IG1", "page_id": "P1", "page_token": "PT"})
 
 
+    def test_login_acha_pagina_do_portfolio_empresarial(self):
+        # Pagina que mora num portfolio empresarial nao aparece em /me/accounts: vem pelo portfolio,
+        # e o token de publicacao dela precisa ser buscado a parte.
+        rede = RedeFalsa([
+            ("GET", "oauth/access_token", [Resposta(200, {"access_token": "curto"}), Resposta(200, {"access_token": "longo"})]),
+            ("GET", "/me/accounts", Resposta(200, {"data": []})),
+            ("GET", "/me/businesses", Resposta(200, {"data": [{"id": "B1", "name": "Portfolio"}]})),
+            ("GET", "/B1/owned_pages", Resposta(200, {"data": [{"id": "P1", "name": "Minha Página",
+                                                               "instagram_business_account": {"id": "IG1", "username": "minhapagina"}}]})),
+            ("GET", "/B1/client_pages", Resposta(200, {"data": []})),
+            ("GET", "/P1", Resposta(200, {"access_token": "PT"})),
+        ])
+        with rede.ativar():
+            contas = self.meta.concluir_login("CODIGO", "http://retorno")
+        self.assertEqual([(c["rede"], c["id_externo"]) for c in contas], [("facebook", "P1"), ("instagram", "IG1")])
+        self.assertEqual(contas[1]["credenciais"]["page_token"], "PT")
+
+    def test_login_sem_pagina_explica_o_portfolio(self):
+        from app.postagem.redes import ErroPostagem
+        rede = RedeFalsa([
+            ("GET", "oauth/access_token", [Resposta(200, {"access_token": "curto"}), Resposta(200, {"access_token": "longo"})]),
+            ("GET", "/me/accounts", Resposta(200, {"data": []})),
+            ("GET", "/me/businesses", Resposta(400, {"error": {"code": 200, "message": "sem permissao"}})),
+        ])
+        with rede.ativar():
+            with self.assertRaises(ErroPostagem) as erro:
+                self.meta.concluir_login("CODIGO", "http://retorno")
+        self.assertIn("portfólio empresarial", str(erro.exception))
+
+
 class TesteTikTok(unittest.TestCase):
     def setUp(self):
         from app.postagem import tiktok

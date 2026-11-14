@@ -22,6 +22,9 @@ GRAPH = f"https://graph.facebook.com/{config.VERSAO_META}"
 RUPLOAD = "https://rupload.facebook.com"
 ESCOPOS = ["pages_show_list", "pages_read_engagement", "pages_manage_posts",
            "instagram_basic", "instagram_content_publish", "business_management"]
+log = config.criar_log("meta")
+CAMPOS_PAGINA = ("id,name,access_token,picture{url},"
+                 "instagram_business_account{id,username,profile_picture_url}")
 ESPERA_PROCESSAMENTO_S = 600
 INTERVALO_CONSULTA_S = 10
 _dormir = time.sleep          # trocado nos testes
@@ -65,6 +68,57 @@ def endereco_de_login(retorno: str, estado: str) -> str:
     return f"https://www.facebook.com/{config.VERSAO_META}/dialog/oauth?" + urlencode(pedido)
 
 
+def _paginas_liberadas(token: str) -> list[dict]:
+    """Paginas que o dono liberou no login.
+
+    /me/accounts lista as Paginas que a pessoa administra no proprio perfil. Paginas que pertencem a
+    um portfolio empresarial (Gerenciador de Negocios) nao aparecem ali: elas sao procuradas pelo
+    portfolio. Cada passo fica no log para o erro nao virar adivinhacao."""
+    lista = chamar("GET", f"{GRAPH}/me/accounts", rede="facebook",
+                   params={"access_token": token, "limit": 100, "fields": CAMPOS_PAGINA})
+    if lista.status_code != 200:
+        raise _erro_da_meta(lista, "lista de Páginas")
+    paginas = json_ou_vazio(lista).get("data", [])
+    log.info("Meta: /me/accounts devolveu %d Pagina(s) (%d ja com token).",
+             len(paginas), sum(1 for p in paginas if p.get("access_token")))
+    if paginas:
+        return paginas
+
+    negocios = chamar("GET", f"{GRAPH}/me/businesses", rede="facebook",
+                      params={"access_token": token, "limit": 50, "fields": "id,name"})
+    if negocios.status_code != 200:
+        log.info("Meta: /me/businesses recusou (%s): sem a permissao business_management nao da para "
+                 "procurar Paginas do portfolio.", negocios.status_code)
+        return []
+    achadas, vistas = [], set()
+    for negocio in json_ou_vazio(negocios).get("data", []):
+        for caminho in ("owned_pages", "client_pages"):
+            resposta = chamar("GET", f"{GRAPH}/{negocio['id']}/{caminho}", rede="facebook",
+                              params={"access_token": token, "limit": 100, "fields": CAMPOS_PAGINA})
+            if resposta.status_code != 200:
+                log.info("Meta: %s do portfolio %s recusado (%s).", caminho,
+                         negocio.get("name", negocio["id"]), resposta.status_code)
+                continue
+            dados = json_ou_vazio(resposta).get("data", [])
+            log.info("Meta: %s do portfolio %s: %d Pagina(s).", caminho,
+                     negocio.get("name", negocio["id"]), len(dados))
+            for pagina in dados:
+                if pagina.get("id") not in vistas:
+                    vistas.add(pagina["id"])
+                    achadas.append(pagina)
+    return achadas
+
+
+def _token_da_pagina(pagina_id: str, token: str) -> str:
+    """Token de publicacao da Pagina, quando a listagem nao trouxe (acontece pelo portfolio)."""
+    resposta = chamar("GET", f"{GRAPH}/{pagina_id}", rede="facebook",
+                      params={"access_token": token, "fields": "access_token"})
+    if resposta.status_code != 200:
+        log.info("Meta: nao consegui o token da Pagina %s (%s).", pagina_id, resposta.status_code)
+        return ""
+    return json_ou_vazio(resposta).get("access_token", "")
+
+
 def concluir_login(codigo: str, retorno: str) -> list[dict]:
     """Devolve as contas para guardar: cada Pagina (facebook) e o Instagram profissional ligado a ela."""
     app_id, segredo = _app()
@@ -77,14 +131,13 @@ def concluir_login(codigo: str, retorno: str) -> list[dict]:
         "fb_exchange_token": json_ou_vazio(curto)["access_token"]})
     if longo.status_code != 200 or "access_token" not in json_ou_vazio(longo):
         raise _erro_da_meta(longo, "login")
-    paginas = chamar("GET", f"{GRAPH}/me/accounts", rede="facebook", params={
-        "access_token": json_ou_vazio(longo)["access_token"], "limit": 100,
-        "fields": "id,name,access_token,picture{url},instagram_business_account{id,username,profile_picture_url}"})
-    if paginas.status_code != 200:
-        raise _erro_da_meta(paginas, "lista de Páginas")
+    token = json_ou_vazio(longo)["access_token"]
     contas = []
-    for pagina in json_ou_vazio(paginas).get("data", []):
+    for pagina in _paginas_liberadas(token):
         if not pagina.get("access_token"):
+            pagina["access_token"] = _token_da_pagina(pagina["id"], token)
+        if not pagina.get("access_token"):
+            log.info("Meta: a Pagina %s veio sem token de publicacao.", pagina.get("name", pagina["id"]))
             continue
         contas.append({"rede": "facebook", "id_externo": pagina["id"], "nome": pagina.get("name", "Página"),
                        "foto": ((pagina.get("picture") or {}).get("data") or {}).get("url"),
@@ -96,7 +149,7 @@ def concluir_login(codigo: str, retorno: str) -> list[dict]:
                            "credenciais": {"ig_id": instagram["id"], "page_id": pagina["id"],
                                            "page_token": pagina["access_token"]}})
     if not contas:
-        raise ErroPostagem("Nenhuma Página do Facebook foi liberada no login. Conecte de novo e marque a sua Página.")
+        raise ErroPostagem("Nenhuma Página do Facebook veio no login. Conecte de novo e marque a sua Página; se ela for de um portfólio empresarial, aceite também o acesso ao portfólio.")
     return contas
 
 
