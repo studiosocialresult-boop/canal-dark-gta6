@@ -5,7 +5,7 @@
 (() => {
   const { $, esc, icone, api, aviso } = Painel;
   const ID = window.TEMPLATE_ID;
-  const NOMES = ["Perfil", "Zonas", "Frases", "Mídia", "Estilo", "Variações", "Gerar"];
+  const NOMES = ["Perfil", "Zonas", "Mídia", "Frases", "Estilo", "Variações", "Gerar"];
 
   let T = null;                  // dados do template (veio do servidor)
   let passo = 1;
@@ -38,14 +38,23 @@
     } catch (erro) { aviso(erro.message, { tipo: "erro" }); }
   }
 
+  /** O vídeo que a prévia mostra agora. */
+  const midiaDaPrevia = () => (midiaEmEdicao && T.midias.find((m) => m.id === midiaEmEdicao && m.zona === 1))
+    || midiasZona(1).filter((m) => m.selecionada)[previaMidia];
+  /** As frases que podem sair com esse vídeo: as dele e as que valem para todos. */
+  const frasesDaPrevia = () => {
+    const m = midiaDaPrevia();
+    return frasesEscolhidas().filter((f) => !f.midia_id || (m && f.midia_id === m.id));
+  };
+
   function atualizarPrevia() {
     clearTimeout(relogioPrevia);
     relogioPrevia = setTimeout(() => {
-      const escolhidas = frasesEscolhidas();
       const midias = midiasZona(1).filter((m) => m.selecionada);
-      if (previaFrase >= escolhidas.length) previaFrase = 0;
       if (previaMidia >= midias.length) previaMidia = 0;
-      const midia = midiaEmEdicao && T.midias.find((m) => m.id === midiaEmEdicao && m.zona === 1) || midias[previaMidia];
+      const midia = midiaDaPrevia();
+      const escolhidas = frasesDaPrevia();
+      if (previaFrase >= escolhidas.length) previaFrase = 0;
       const texto = textoDigitado || (escolhidas[previaFrase] ? escolhidas[previaFrase].texto : "");
       const url = `/api/templates/${ID}/previa.jpg?frase=${encodeURIComponent(texto)}` +
         `${midia ? "&midia=" + midia.id : ""}&v=${Date.now()}`;
@@ -63,8 +72,12 @@
   }
 
   const passear = (que, delta) => {
-    if (que === "frase") previaFrase = (previaFrase + delta + frasesEscolhidas().length) % Math.max(frasesEscolhidas().length, 1);
-    else { midiaEmEdicao = null; previaMidia = (previaMidia + delta + midiasZona(1).filter((m) => m.selecionada).length) % Math.max(midiasZona(1).filter((m) => m.selecionada).length, 1); }
+    if (que === "frase") previaFrase = (previaFrase + delta + frasesDaPrevia().length) % Math.max(frasesDaPrevia().length, 1);
+    else {
+      const n = midiasZona(1).filter((m) => m.selecionada).length;
+      midiaEmEdicao = null; previaFrase = 0;
+      previaMidia = (previaMidia + delta + n) % Math.max(n, 1);
+    }
     textoDigitado = "";
     atualizarPrevia();
   };
@@ -109,6 +122,11 @@
         catch (erro) { aviso(erro.message, { tipo: "erro" }); }
       }, 300);
     } else if (alvo.id === "nova-frase") {
+      textoDigitado = alvo.value.trim();
+      atualizarPrevia();
+    } else if (alvo.dataset.novaDoVideo) {
+      const indice = midiasZona(1).filter((m) => m.selecionada).findIndex((m) => m.id === Number(alvo.dataset.novaDoVideo));
+      if (indice >= 0) { previaMidia = indice; midiaEmEdicao = null; }
       textoDigitado = alvo.value.trim();
       atualizarPrevia();
     }
@@ -157,6 +175,10 @@
         e.stopPropagation();
         await acao(() => api(`/api/perfis-pagina/${dado.id}`, { metodo: "DELETE" }), true); break;
       case "gerar-frases": await gerarFrases(); break;
+      case "gerar-todos-videos": await gerarPorVideo(null); break;
+      case "gerar-do-video": await gerarPorVideo(Number(dado.id)); break;
+      case "add-do-video": await adicionarDoVideo(Number(dado.id)); break;
+      case "ir-passo": await irPara(Number(dado.passo)); break;
       case "usar-sugestao": await usarSugestoes([sugestoes[Number(dado.i)]], Number(dado.i)); break;
       case "usar-todas": await usarSugestoes(sugestoes.slice(), null); break;
       case "add-frase": await adicionarFrase(); break;
@@ -245,32 +267,92 @@
       ${T.zonas_de_video === 2 ? `<div class="aviso-caixa">${icone("alerta")}<span>Neste modelo há duas zonas de vídeo. No passo Mídia você escolhe o vídeo da zona de baixo; sem escolha, ela mostra o mesmo vídeo desfocado.</span></div>` : ""}`;
   }
 
-  // ---------- passo 3: frases ----------
+  // ---------- passo 4: frases (depois da mídia: a IA precisa saber os vídeos) ----------
+
+  let gerandoFrases = false;
+  const frasesDoVideo = (midiaId) => T.frases.filter((f) => f.midia_id === midiaId);
+  const frasesGerais = () => T.frases.filter((f) => !f.midia_id);
+
+  const itemFrase = (f) => `<div class="frase-item">
+        <input type="text" data-frase-texto="${f.id}" value="${esc(f.texto)}" maxlength="240" aria-label="Frase">
+        <button class="mini no" data-acao="tirar-frase" data-id="${f.id}" aria-label="Apagar frase">${icone("x")}</button></div>`;
+
+  function cartaoDoVideo(m) {
+    const lista = frasesDoVideo(m.id);
+    return `<div class="secao" data-midia="${m.id}">
+        <div style="display:flex;gap:12px;align-items:center">
+          <img src="${miniMidia(m)}" alt="" width="45" height="80" style="border-radius:8px;object-fit:cover;flex:none;background:#0002" onerror="this.style.display='none'">
+          <div style="min-width:0;flex:1"><b title="${esc(m.rotulo)}" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.rotulo)}</b>
+            <span class="dica">${lista.length} ${lista.length === 1 ? "frase" : "frases"} só deste vídeo</span></div>
+          <button class="botao pequeno" data-acao="gerar-do-video" data-id="${m.id}" ${gerandoFrases ? "disabled" : ""}>${lista.length ? "Gerar mais" : "Gerar frases"}</button></div>
+        <div class="lista">${lista.length ? lista.map(itemFrase).join("") : '<div class="vazio-pequeno">Ainda sem frases para este vídeo.</div>'}</div>
+        <div style="display:flex;gap:8px"><input class="campo" data-nova-do-video="${m.id}" maxlength="240" placeholder="Escrever uma frase para este vídeo">
+          <button class="botao primario" data-acao="add-do-video" data-id="${m.id}" aria-label="Adicionar frase">${icone("mais")}</button></div></div>`;
+  }
 
   function passoFrases() {
-    const lista = T.frases.length ? T.frases.map((f) => `<div class="frase-item">
-        <input type="text" data-frase-texto="${f.id}" value="${esc(f.texto)}" maxlength="240" aria-label="Frase">
-        <button class="mini no" data-acao="tirar-frase" data-id="${f.id}" aria-label="Apagar frase">${icone("x")}</button></div>`).join("")
-      : '<div class="vazio-pequeno">Ainda sem frases. Gere com a IA ou escreva a sua.</div>';
+    const videos = midiasZona(1).filter((m) => m.selecionada);
+    if (!videos.length) {
+      return `<h2>Frases</h2><p class="dica">A IA escreve as frases olhando o título de cada vídeo. Por isso, escolha os vídeos primeiro.</p>
+        <div class="vazio-pequeno">Nenhum vídeo escolhido ainda.</div>
+        <button class="botao primario" data-acao="ir-passo" data-passo="3" style="justify-self:start">Escolher os vídeos</button>`;
+    }
     const itens = sugestoes.map((s, i) => `<div class="sugestao"><span>${esc(s)}</span>
         <button class="botao pequeno" data-acao="usar-sugestao" data-i="${i}">Usar</button></div>`).join("");
-    return `<h2>Frases</h2><p class="dica">Cada frase vira um vídeo diferente. Escreva a ideia e a IA cria variações, ou escreva você mesmo.</p>
-      <div class="duas-colunas">
-        <div style="display:grid;gap:14px;align-content:start">
-          <div class="secao"><h3>Gerar com IA</h3>
-            <textarea class="campo" id="ideia-base" maxlength="300" placeholder="Descreva a ideia do vídeo. Ex.: A página perfeita para quem quer saber tudo sobre o GTA 6">${esc(window.__ideia || "")}</textarea>
-            <div style="display:flex;gap:8px;align-items:center">
-              <select class="campo-select" id="qtd-frases" style="flex:none">${[3, 5, 8, 10, 15].map((n) => `<option value="${n}" ${n === (window.__qtd || 5) ? "selected" : ""}>${n} sugestões</option>`).join("")}</select>
-              <button class="botao primario" id="botao-gerar" data-acao="gerar-frases" style="flex:1">Gerar sugestões</button></div>
-            <span class="dica">Custa uma fração de centavo.</span>
-            <div class="lista" id="sugestoes">${itens}</div>
-            ${sugestoes.length ? `<button class="botao" data-acao="usar-todas">${icone("mais")}Adicionar todas</button>` : ""}</div>
-          <div class="secao"><h3>Escrever frase</h3>
-            <div style="display:flex;gap:8px"><input class="campo" id="nova-frase" maxlength="240" placeholder="Digite e aperte Enter">
-              <button class="botao primario" data-acao="add-frase" aria-label="Adicionar frase">${icone("mais")}</button></div></div>
+    const gerais = frasesGerais();
+    const qtd = window.__qtdVideo || 3;
+    return `<h2>Frases</h2><p class="dica">A frase aparece escrita no vídeo e é o que faz a pessoa parar de rolar. Cada vídeo tem as suas frases, escritas a partir do título dele: uma frase só sai com o vídeo dela.</p>
+      <div class="secao"><h3>Gerar com IA, uma por vídeo</h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="campo-select" id="qtd-por-video" style="flex:none">${[1, 2, 3, 5].map((n) => `<option value="${n}" ${n === qtd ? "selected" : ""}>${n} por vídeo</option>`).join("")}</select>
+          <button class="botao primario" id="botao-gerar-todos" data-acao="gerar-todos-videos" style="flex:1" ${gerandoFrases ? "disabled" : ""}>${gerandoFrases ? "Gerando…" : `Gerar para os ${videos.length} ${videos.length === 1 ? "vídeo" : "vídeos"}`}</button></div>
+        <span class="dica">A IA lê o título de cada vídeo. Custa uma fração de centavo por vídeo. Você pode editar ou apagar qualquer frase.</span></div>
+      ${videos.map(cartaoDoVideo).join("")}
+      <details class="secao" ${gerais.length || sugestoes.length ? "open" : ""}>
+        <summary style="cursor:pointer;font-weight:600">Frases para todos os vídeos (opcional)</summary>
+        <p class="dica">Uma frase aqui sai combinada com todos os vídeos. Serve para uma chamada que vale para qualquer fundo.</p>
+        <div class="duas-colunas">
+          <div style="display:grid;gap:14px;align-content:start">
+            <div class="secao"><h3>Gerar a partir de uma ideia</h3>
+              <textarea class="campo" id="ideia-base" maxlength="300" placeholder="Descreva a ideia. Ex.: A página perfeita para quem quer saber tudo sobre o GTA 6">${esc(window.__ideia || "")}</textarea>
+              <div style="display:flex;gap:8px;align-items:center">
+                <select class="campo-select" id="qtd-frases" style="flex:none">${[3, 5, 8, 10, 15].map((n) => `<option value="${n}" ${n === (window.__qtd || 5) ? "selected" : ""}>${n} sugestões</option>`).join("")}</select>
+                <button class="botao primario" id="botao-gerar" data-acao="gerar-frases" style="flex:1">Gerar sugestões</button></div>
+              <div class="lista" id="sugestoes">${itens}</div>
+              ${sugestoes.length ? `<button class="botao" data-acao="usar-todas">${icone("mais")}Adicionar todas</button>` : ""}</div>
+            <div class="secao"><h3>Escrever frase</h3>
+              <div style="display:flex;gap:8px"><input class="campo" id="nova-frase" maxlength="240" placeholder="Digite e aperte Enter">
+                <button class="botao primario" data-acao="add-frase" aria-label="Adicionar frase">${icone("mais")}</button></div></div>
+          </div>
+          <div class="secao" style="border-top:0;padding-top:0;align-content:start"><h3>Para todos os vídeos (${gerais.length})</h3>
+            <div class="lista">${gerais.length ? gerais.map(itemFrase).join("") : '<div class="vazio-pequeno">Nenhuma frase geral.</div>'}</div></div>
         </div>
-        <div class="secao" style="border-top:0;padding-top:0;align-content:start"><h3>Frases do projeto (${T.frases.length})</h3><div class="lista">${lista}</div></div>
-      </div>`;
+      </details>`;
+  }
+
+  /** A IA escreve as frases a partir do título de cada vídeo (ou de um só). */
+  async function gerarPorVideo(midiaId) {
+    if (gerandoFrases) return;
+    const qtd = Number($("#qtd-por-video").value) || 3;
+    window.__qtdVideo = qtd;
+    gerandoFrases = true; desenharPasso();
+    try {
+      const r = await api(`/api/templates/${ID}/frases/gerar-por-video`, { metodo: "POST", corpo: { quantidade: qtd, midia_id: midiaId } });
+      Painel.atualizarGasto();
+      if (r.erros.length) aviso(`${r.erros.length} ${r.erros.length === 1 ? "vídeo ficou" : "vídeos ficaram"} sem frases: ${r.erros[0].erro}`, { tipo: "erro" });
+    } catch (erro) { aviso(erro.message, { tipo: "erro" }); }
+    gerandoFrases = false;
+    try { await recarregar(); } catch (e) { /* a tela abaixo mostra o que houver */ }
+    desenharPasso(); atualizarPrevia();
+  }
+
+  async function adicionarDoVideo(midiaId) {
+    const campo = painel.querySelector(`[data-nova-do-video="${midiaId}"]`);
+    const texto = campo ? campo.value.trim() : "";
+    if (!texto) return;
+    textoDigitado = "";
+    await acao(() => api(`/api/templates/${ID}/frases`, { metodo: "POST", corpo: { textos: [texto], midia_id: midiaId } }), true);
+    const novo = painel.querySelector(`[data-nova-do-video="${midiaId}"]`); if (novo) novo.focus();
   }
 
   async function gerarFrases() {
@@ -303,10 +385,11 @@
   }
   painel.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.target.id === "nova-frase") { e.preventDefault(); adicionarFrase(); }
+    else if (e.key === "Enter" && e.target.dataset.novaDoVideo) { e.preventDefault(); adicionarDoVideo(Number(e.target.dataset.novaDoVideo)); }
     else if (e.key === "Enter" && e.target.dataset.fraseTexto) e.target.blur();
   });
 
-  // ---------- passo 4: mídia ----------
+  // ---------- passo 3: mídia ----------
 
   const noTemplate = (corteId, zona) => T.midias.find((m) => m.corte_id === corteId && m.zona === zona);
   const miniMidia = (m) => `/api/templates/${ID}/midias/${m.id}/miniatura.jpg`;
@@ -333,7 +416,7 @@
         ${midiasZona(2).length ? `<div class="miniaturas">${midiasZona(2).map((m) => miniaturaMidia(m, false)).join("")}</div>` : ""}
         ${cortesDoCanal && cortesDoCanal.length ? `<div class="miniaturas">${cortesDoCanal.slice(0, 12).map((c) => miniaturaCorte(c, 2)).join("")}</div>` : ""}
         <label class="botao pequeno" style="cursor:pointer;justify-self:start">${icone("baixar", "transform:rotate(180deg)")}Enviar um vídeo<input type="file" id="arquivo-videos" data-zona="2" accept="video/*" hidden></label></div>` : "";
-    return `<h2>Vídeos</h2><p class="dica">Escolha de onde vêm os vídeos. Cada vídeo será combinado com cada frase.</p>
+    return `<h2>Vídeos</h2><p class="dica">Escolha de onde vêm os vídeos. No próximo passo, a IA escreve as frases de cada um, olhando o título dele.</p>
       <div class="secao"><h3>Cortes do seu canal</h3>${cortes}</div>
       <div class="secao"><h3>Biblioteca (baixados na tela Perfis)</h3>${bibliotecaHtml()}</div>
       <div class="secao"><h3>Enviar do computador</h3>
@@ -353,7 +436,7 @@
 
   async function carregarBiblioteca() {
     try { bibliotecaVideos = (await api("/api/biblioteca")).itens; } catch (e) { bibliotecaVideos = []; }
-    if (passo === 4) desenharPasso();
+    if (passo === 3) desenharPasso();
   }
 
   async function alternarBiblioteca(itemId) {
@@ -432,10 +515,10 @@
           <img src="${miniMidia(m)}" alt="" onerror="this.style.display='none'"><span class="marca">${icone("check")}</span><span class="legenda">${esc(m.rotulo)}</span></button>`).join("")}</div>`
       : '<div class="vazio-pequeno">Sem vídeos. Volte ao passo Mídia.</div>';
     const frases = T.frases.length ? `<div class="lista">${T.frases.map((f) => `
-        <label class="frase-item" style="cursor:pointer"><input type="checkbox" ${f.selecionada ? "checked" : ""} data-acao="marcar-frase" data-id="${f.id}" style="accent-color:var(--acento);width:18px;height:18px"><span>${esc(f.texto)}</span></label>`).join("")}</div>`
+        <label class="frase-item" style="cursor:pointer"><input type="checkbox" ${f.selecionada ? "checked" : ""} data-acao="marcar-frase" data-id="${f.id}" style="accent-color:var(--acento);width:18px;height:18px"><span>${esc(f.texto)}${f.midia_id ? ` <small class="dica">· ${esc((T.midias.find((m) => m.id === f.midia_id) || {}).rotulo || "")}</small>` : ""}</span></label>`).join("")}</div>`
       : '<div class="vazio-pequeno">Sem frases. Volte ao passo Frases.</div>';
-    return `<h2>Variações</h2><p class="dica">Marque o que entra. Cada vídeo marcado é combinado com cada frase marcada.</p>
-      <div class="contador-grande"><strong>${r.total}</strong> variações serão geradas<span style="font-weight:500;margin-left:auto;font-size:13px">${r.midias} vídeo${r.midias === 1 ? "" : "s"} × ${r.frases} frase${r.frases === 1 ? "" : "s"}${r.ja_existem ? ` · ${r.ja_existem} já geradas` : ""}</span></div>
+    return `<h2>Variações</h2><p class="dica">Marque o que entra. Cada frase sai com o vídeo dela; as frases "para todos" saem com todos os vídeos.</p>
+      <div class="contador-grande"><strong>${r.total}</strong> variações serão geradas<span style="font-weight:500;margin-left:auto;font-size:13px">${r.midias} vídeo${r.midias === 1 ? "" : "s"} · ${r.frases} frase${r.frases === 1 ? "" : "s"}${r.ja_existem ? ` · ${r.ja_existem} já geradas` : ""}</span></div>
       ${r.total > 60 ? `<div class="aviso-caixa">${icone("alerta")}<span>São muitos vídeos. Cada um leva de 10 a 40 segundos para ficar pronto no seu computador; o trabalho segue na fila e você pode fechar o painel.</span></div>` : ""}
       <div class="secao"><h3>Vídeos <span style="text-transform:none;letter-spacing:0;font-weight:500">· <a href="#" data-acao="todas-midias" data-valor="1">todos</a> · <a href="#" data-acao="todas-midias" data-valor="0">nenhum</a></span></h3>${midias}</div>
       <div class="secao"><h3>Frases <span style="text-transform:none;letter-spacing:0;font-weight:500">· <a href="#" data-acao="todas-frases" data-valor="1">todas</a> · <a href="#" data-acao="todas-frases" data-valor="0">nenhuma</a></span></h3>${frases}</div>`;
@@ -470,7 +553,7 @@
         <b>${trabalhando ? `Renderizando… ${feitos}/${c.total}` : `${c.pronto} de ${c.total} vídeos prontos`}</b>
         <span class="dica">${c.falhou ? `${c.falhou} com falha` : ""}</span></div>
         <div class="trilho-progresso"><i style="width:${pct}%"></i></div></div>`
-      : `<div class="contador-grande"><strong>${r.total}</strong> vídeos serão gerados (${r.midias} × ${r.frases})</div>`;
+      : `<div class="contador-grande"><strong>${r.total}</strong> vídeos serão gerados (${r.midias} vídeo${r.midias === 1 ? "" : "s"}, cada um com as suas frases)</div>`;
     const grade = saidas.saidas.length ? `<div class="grade-saidas">${saidas.saidas.map((s) => `
         <div class="saida"><div class="tela">${s.url ? `<video src="${s.url}" controls preload="metadata" playsinline></video>`
           : s.estado === "falhou" ? `<span style="padding:12px;text-align:center;font-size:12px;color:var(--erro)">${esc(s.erro || "Falhou")}</span>`
@@ -502,7 +585,7 @@
 
   // ---------- navegação entre passos ----------
 
-  const PASSOS_HTML = [passoPerfil, passoZonas, passoFrases, passoMidia, passoEstilo, passoVariacoes, passoGerar];
+  const PASSOS_HTML = [passoPerfil, passoZonas, passoMidia, passoFrases, passoEstilo, passoVariacoes, passoGerar];
 
   function desenharPassos() {
     $("#passos").innerHTML = NOMES.map((nome, i) => `<button class="passo ${i + 1 === passo ? "ativo" : ""} ${i + 1 < passo ? "feito" : ""}" data-passo="${i + 1}"><i>${i + 1 < passo ? "✓" : i + 1}</i>${nome}</button>`).join("");
@@ -515,8 +598,8 @@
     painel.innerHTML = PASSOS_HTML[passo - 1]();
     desenharPassos();
     if (passo === 1) carregarPerfis();
-    if (passo === 4 && cortesDoCanal === null) carregarCortes();
-    if (passo === 4 && bibliotecaVideos === null) carregarBiblioteca();
+    if (passo === 3 && cortesDoCanal === null) carregarCortes();
+    if (passo === 3 && bibliotecaVideos === null) carregarBiblioteca();
     if (passo === 7) { atualizarSaidas(); }
     const envio = $("#area-envio");
     if (envio) {
@@ -534,7 +617,7 @@
       const dados = await api("/api/cortes");
       cortesDoCanal = dados.cortes.filter((c) => c.estado !== "descartado" && c.estado !== "falhou" && c.miniatura);
     } catch (e) { cortesDoCanal = []; }
-    if (passo === 4) desenharPasso();
+    if (passo === 3) desenharPasso();
   }
 
   async function irPara(novo) {

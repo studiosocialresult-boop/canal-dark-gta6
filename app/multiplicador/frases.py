@@ -5,6 +5,9 @@ As instrucoes ficam em prompts/frases_variacoes.md. A resposta e conferida
 
 Rodar sozinho (gasta uma fracao de centavo):
     python -m app.multiplicador.frases "A página perfeita para quem quer saber tudo do GTA 6" 5
+
+Frases casadas com um video (a IA le o titulo dele):
+    gerar_para_video("Rockstar confirma GTA 6 a 30 FPS nos consoles", None, 3, usuario_id=1)
 """
 import re
 import sys
@@ -67,6 +70,36 @@ def gerar_variacoes(base: str, quantidade: int, *, usuario_id: int, cliente=None
         esquema=ESQUEMA,
         validar=lambda d: validar_frases(d, base, quantidade),
         etapa="frases_variacoes",
+        usuario_id=usuario_id,
+        cliente=cliente,
+    )
+    return [f.strip() for f in dados["frases"]]
+
+
+def gerar_para_video(titulo: str, motivo: str | None, quantidade: int, *, usuario_id: int, cliente=None) -> list[str]:
+    """Frases escritas para UM video, a partir do titulo dele (e do motivo de o corte ter sido escolhido).
+
+    Prompt em prompts/frases_do_video.md. Devolve `quantidade` frases, da mais forte para a mais fraca.
+    """
+    titulo = " ".join((titulo or "").split())
+    if len(titulo) < 3:
+        raise ValueError("Este vídeo não tem título para a IA se basear.")
+    if not 1 <= quantidade <= LIMITE_QUANTIDADE:
+        raise ValueError(f"Peça de 1 a {LIMITE_QUANTIDADE} frases por vídeo.")
+    linhas = [f"Título do vídeo: {titulo}"]
+    motivo = " ".join((motivo or "").split())
+    if motivo:
+        linhas.append(f"Por que este trecho foi escolhido: {motivo[:600]}")
+    linhas.append(f"Quantidade de frases: {quantidade}")
+    mensagem = "\n".join(linhas)
+    dados = ia.pedir_json(
+        modelo=config.MODELO_RAPIDO,
+        esforco=config.ESFORCO_RAPIDO,
+        sistema=ia.carregar_prompt("frases_do_video.md", max_caracteres=MAX_CARACTERES, quantidade=quantidade),
+        mensagem=mensagem,
+        esquema=ESQUEMA,
+        validar=lambda d: validar_frases(d, titulo, quantidade),
+        etapa="frases_do_video",
         usuario_id=usuario_id,
         cliente=cliente,
     )

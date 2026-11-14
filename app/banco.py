@@ -174,13 +174,15 @@ CREATE TABLE IF NOT EXISTS template_midias (
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- midia_id: a frase pertence a um video so (so sai combinada com ele). Vazio: vale para todos os videos.
 CREATE TABLE IF NOT EXISTS template_frases (
     id INTEGER PRIMARY KEY,
     template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
     texto TEXT NOT NULL,
     origem TEXT NOT NULL DEFAULT 'manual',
     selecionada INTEGER NOT NULL DEFAULT 1,
-    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    midia_id INTEGER REFERENCES template_midias(id) ON DELETE CASCADE
 );
 
 -- Videos baixados pelas telas Perfis (ficam para usar nos templates e no editor).
@@ -342,10 +344,19 @@ def criar_tabelas() -> None:
     _migrar_tabelas_com_trava()
     with closing(conectar()) as conexao, conexao:
         conexao.executescript(ESQUEMA)
+        _garantir_colunas(conexao)
         conexao.execute(
             "INSERT OR IGNORE INTO usuarios (id, nome) VALUES (?, ?)",
             (config.USUARIO_PADRAO, "dono"),
         )
+
+
+def _garantir_colunas(conexao) -> None:
+    """Bancos antigos nao tem colunas que foram acrescentadas depois. Acrescenta sem perder dados."""
+    colunas = {l["name"] for l in conexao.execute("PRAGMA table_info(template_frases)")}
+    if "midia_id" not in colunas:
+        conexao.execute("ALTER TABLE template_frases ADD COLUMN midia_id INTEGER "
+                        "REFERENCES template_midias(id) ON DELETE CASCADE")
 
 
 TRAVAS_ANTIGAS = {"fila": "CHECK (tipo", "templates": "CHECK (layout"}

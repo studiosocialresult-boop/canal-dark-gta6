@@ -50,7 +50,7 @@ def _json_template(t: dict, na_fila: bool = False) -> dict:
 def _resumo(template_id: int) -> dict:
     midias, frases = repositorio.combinacoes(template_id)
     existentes = {(s["midia_id"], s["frase_id"]) for s in repositorio.listar_saidas(template_id)}
-    cruzamento = [(m["id"], f["id"]) for m in midias for f in frases]
+    cruzamento = [(m["id"], f["id"]) for m, f in repositorio.cruzamento(template_id)]
     return {"midias": len(midias), "frases": len(frases), "total": len(cruzamento),
             "novas": sum(1 for c in cruzamento if c not in existentes),
             "ja_existem": sum(1 for c in cruzamento if c in existentes)}
@@ -216,7 +216,8 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         escolhida = repositorio.ler_midia(midia) if midia else (midias[0] if midias else None)
         if escolhida and escolhida["template_id"] != t["id"]:
             raise HTTPException(404)
-        texto = " ".join(frase.split()) or (frases[0]["texto"] if frases else FRASE_DE_EXEMPLO)
+        do_video = repositorio.frases_da_midia(frases, escolhida["id"] if escolhida else None)
+        texto = " ".join(frase.split()) or (do_video[0]["texto"] if do_video else FRASE_DE_EXEMPLO)
         try:
             imagem = renderizar.previa(t, texto[:300], escolhida)
         except renderizar.ErroRender as erro:
@@ -366,8 +367,37 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         textos = [str(t) for t in dados.get("textos", [])][:200]
         if any(len(t) > 240 for t in textos):
             raise HTTPException(400, "Cada frase pode ter no máximo 240 caracteres.")
-        return {"ok": True, "novas": repositorio.adicionar_frases(template_id, textos, str(dados.get("origem", "manual"))),
+        midia_id = _midia_da_frase(template_id, dados.get("midia_id"))
+        return {"ok": True, "novas": repositorio.adicionar_frases(template_id, textos, str(dados.get("origem", "manual")), midia_id),
                 "resumo": _resumo(template_id)}
+
+    @app.post("/api/templates/{template_id}/frases/gerar-por-video")
+    def api_gerar_frases_por_video(template_id: int, dados: dict = Body(...)):
+        """A IA le o titulo de cada video e escreve as frases dele. Um video com problema nao derruba os outros."""
+        _template_do_dono(template_id)
+        try:
+            quantidade = int(dados.get("quantidade", 3))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Quantidade inválida.")
+        alvo = _midia_da_frase(template_id, dados.get("midia_id"))
+        midias = [m for m in repositorio.listar_midias(template_id) if m["selecionada"] and m["zona"] == 1]
+        if alvo is not None:
+            midias = [m for m in midias if m["id"] == alvo]
+        if not midias:
+            raise HTTPException(400, "Escolha os vídeos primeiro, no passo Mídia.")
+        resultado, erros = [], []
+        for m in midias:
+            try:
+                sugestoes = modulo_frases.gerar_para_video(
+                    m["corte_titulo"] or m["rotulo"], m.get("corte_motivo"), quantidade, usuario_id=USUARIO)
+            except (ValueError, ia.ErroIA) as erro:
+                erros.append({"midia_id": m["id"], "rotulo": m["rotulo"], "erro": str(erro)})
+                continue
+            novas = repositorio.adicionar_frases(template_id, sugestoes, "ia", m["id"])
+            resultado.append({"midia_id": m["id"], "novas": novas})
+        if not resultado:
+            raise HTTPException(502, erros[0]["erro"] if erros else "A IA não entregou frases.")
+        return {"ok": True, "videos": resultado, "erros": erros, "resumo": _resumo(template_id)}
 
     @app.post("/api/templates/{template_id}/frases/gerar")
     def api_gerar_frases(template_id: int, dados: dict = Body(...)):
@@ -511,6 +541,19 @@ def _midia_do_template(template_id: int, midia_id: int) -> dict:
     if midia is None or midia["template_id"] != template_id:
         raise HTTPException(404, "Vídeo não encontrado neste template.")
     return midia
+
+
+def _midia_da_frase(template_id: int, valor) -> int | None:
+    """Confere que o video informado e deste template. Sem valor: a frase vale para todos os videos."""
+    if valor in (None, "", 0):
+        return None
+    try:
+        midia = repositorio.ler_midia(int(valor))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Vídeo inválido.")
+    if midia is None or midia["template_id"] != template_id:
+        raise HTTPException(404, "Vídeo não encontrado neste template.")
+    return midia["id"]
 
 
 def _frase_do_template(template_id: int, frase_id: int) -> dict:

@@ -99,7 +99,7 @@ def pasta_do_template(template_id: int):
 def listar_midias(template_id: int) -> list[dict]:
     with closing(banco.conectar()) as conexao:
         linhas = conexao.execute(
-            "SELECT m.*, c.titulo AS corte_titulo, c.inicio_s, c.fim_s "
+            "SELECT m.*, c.titulo AS corte_titulo, c.motivo AS corte_motivo, c.inicio_s, c.fim_s "
             "FROM template_midias m LEFT JOIN cortes c ON c.id = m.corte_id "
             "WHERE m.template_id = ? ORDER BY m.zona, m.id", (template_id,)).fetchall()
     return [dict(l) for l in linhas]
@@ -198,18 +198,22 @@ def ler_frase(frase_id: int) -> dict | None:
         return _dict(conexao.execute("SELECT * FROM template_frases WHERE id = ?", (frase_id,)).fetchone())
 
 
-def adicionar_frases(template_id: int, textos: list[str], origem: str = "manual") -> int:
-    """Grava as frases novas (ignora vazias e repetidas). Devolve quantas entraram."""
+def adicionar_frases(template_id: int, textos: list[str], origem: str = "manual", midia_id: int | None = None) -> int:
+    """Grava as frases novas (ignora vazias e repetidas). Devolve quantas entraram.
+
+    midia_id: a frase so sai combinada com esse video. Sem ele, vale para todos os videos.
+    Repetida e a mesma frase para o mesmo video (videos diferentes podem ter frases iguais).
+    """
     entrou = 0
     with closing(banco.conectar()) as conexao, conexao:
         existentes = {l["texto"].strip().lower() for l in conexao.execute(
-            "SELECT texto FROM template_frases WHERE template_id = ?", (template_id,))}
+            "SELECT texto FROM template_frases WHERE template_id = ? AND midia_id IS ?", (template_id, midia_id))}
         for texto in textos:
             texto = " ".join(str(texto).split())
             if not texto or texto.lower() in existentes:
                 continue
-            conexao.execute("INSERT INTO template_frases (template_id, texto, origem) VALUES (?, ?, ?)",
-                            (template_id, texto, origem))
+            conexao.execute("INSERT INTO template_frases (template_id, texto, origem, midia_id) VALUES (?, ?, ?, ?)",
+                            (template_id, texto, origem, midia_id))
             existentes.add(texto.lower())
             entrou += 1
     return entrou
@@ -232,32 +236,41 @@ def excluir_frase(frase_id: int) -> None:
 # ---------- videos gerados ----------
 
 def combinacoes(template_id: int) -> tuple[list[dict], list[dict]]:
-    """As midias (zona 1) e frases selecionadas: o cruzamento delas e o que sera gerado."""
+    """As midias (zona 1) e as frases selecionadas do template."""
     midias = [m for m in listar_midias(template_id) if m["selecionada"] and m["zona"] == 1]
     frases = [f for f in listar_frases(template_id) if f["selecionada"]]
     return midias, frases
 
 
+def frases_da_midia(frases: list[dict], midia_id: int | None) -> list[dict]:
+    """As frases que podem sair com este video: as dele e as que valem para todos."""
+    return [f for f in frases if f.get("midia_id") in (None, midia_id)]
+
+
+def cruzamento(template_id: int) -> list[tuple[dict, dict]]:
+    """Os pares (video, frase) que serao gerados. Frase de um video so sai com ele; frase sem video sai com todos."""
+    midias, frases = combinacoes(template_id)
+    return [(m, f) for m in midias for f in frases_da_midia(frases, m["id"])]
+
+
 def gerar_saidas(template_id: int) -> tuple[int, int]:
     """Cria as linhas de video a gerar. Devolve (novas, que ja existiam). Falhas voltam para a fila."""
-    midias, frases = combinacoes(template_id)
     novas = ja_existiam = 0
     with closing(banco.conectar()) as conexao, conexao:
-        for midia in midias:
-            for frase in frases:
-                existente = conexao.execute(
-                    "SELECT id, estado FROM template_saidas WHERE template_id = ? AND midia_id = ? AND frase_id = ?",
-                    (template_id, midia["id"], frase["id"])).fetchone()
-                if existente is None:
-                    conexao.execute(
-                        "INSERT INTO template_saidas (template_id, midia_id, frase_id) VALUES (?, ?, ?)",
-                        (template_id, midia["id"], frase["id"]))
-                    novas += 1
-                else:
-                    ja_existiam += 1
-                    if existente["estado"] == "falhou":
-                        conexao.execute("UPDATE template_saidas SET estado = 'aguardando', erro = NULL WHERE id = ?",
-                                        (existente["id"],))
+        for midia, frase in cruzamento(template_id):
+            existente = conexao.execute(
+                "SELECT id, estado FROM template_saidas WHERE template_id = ? AND midia_id = ? AND frase_id = ?",
+                (template_id, midia["id"], frase["id"])).fetchone()
+            if existente is None:
+                conexao.execute(
+                    "INSERT INTO template_saidas (template_id, midia_id, frase_id) VALUES (?, ?, ?)",
+                    (template_id, midia["id"], frase["id"]))
+                novas += 1
+            else:
+                ja_existiam += 1
+                if existente["estado"] == "falhou":
+                    conexao.execute("UPDATE template_saidas SET estado = 'aguardando', erro = NULL WHERE id = ?",
+                                    (existente["id"],))
     return novas, ja_existiam
 
 

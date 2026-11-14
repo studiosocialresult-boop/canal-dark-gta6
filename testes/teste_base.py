@@ -929,6 +929,108 @@ class TesteTemplates(unittest.TestCase):
         self.assertEqual(self.repo.gerar_saidas(template_id), (0, 1))
         self.assertEqual(self.repo.ler_saida(saida["id"])["estado"], "aguardando")
 
+    def test_frase_de_um_video_so_sai_com_ele(self):
+        template_id = self.novo()
+        a = self.repo.adicionar_arquivo(template_id, "templates/x/a.mp4", "A")
+        b = self.repo.adicionar_arquivo(template_id, "templates/x/b.mp4", "B")
+        c = self.repo.adicionar_arquivo(template_id, "templates/x/c.mp4", "C")
+        self.repo.adicionar_frases(template_id, ["Do A um", "Do A dois"], "ia", a)
+        self.repo.adicionar_frases(template_id, ["Do B um", "Do B dois"], "ia", b)
+        self.repo.adicionar_frases(template_id, ["Do C um", "Do C dois"], "ia", c)
+        self.repo.adicionar_frases(template_id, ["Serve para todos"])
+        pares = {(m["rotulo"], f["texto"]) for m, f in self.repo.cruzamento(template_id)}
+        self.assertEqual(len(pares), 9)                                              # 3 videos x (2 deles + 1 geral)
+        self.assertNotIn(("B", "Do A um"), pares)
+        self.assertIn(("A", "Do A um"), pares)
+        self.assertEqual({t for v, t in pares if t == "Serve para todos"}, {"Serve para todos"})
+        self.assertEqual(len({v for v, t in pares if t == "Serve para todos"}), 3)  # a geral sai com os tres
+        self.assertEqual(self.repo.gerar_saidas(template_id), (9, 0))
+        # a mesma frase pode existir em videos diferentes, mas nao duas vezes no mesmo
+        self.assertEqual(self.repo.adicionar_frases(template_id, ["Do A um"], "manual", b), 1)
+        self.assertEqual(self.repo.adicionar_frases(template_id, ["do a um"], "manual", b), 0)
+        # video desmarcado nao entra; video apagado leva as frases dele junto
+        self.repo.atualizar_midia(a, selecionada=False)
+        self.assertEqual({m["rotulo"] for m, f in self.repo.cruzamento(template_id)}, {"B", "C"})
+        self.repo.excluir_midia(c)
+        self.assertFalse([f for f in self.repo.listar_frases(template_id) if f["midia_id"] == c])
+        self.assertTrue([f for f in self.repo.listar_frases(template_id) if f["midia_id"] is None])
+
+    def test_banco_antigo_ganha_a_coluna_midia_id_sem_perder_frases(self):
+        import sqlite3
+        conexao = sqlite3.connect(":memory:")
+        conexao.row_factory = sqlite3.Row
+        conexao.execute("CREATE TABLE template_midias (id INTEGER PRIMARY KEY)")
+        conexao.execute("CREATE TABLE template_frases (id INTEGER PRIMARY KEY, template_id INTEGER, texto TEXT)")
+        conexao.execute("INSERT INTO template_frases (template_id, texto) VALUES (1, 'Antiga')")
+        banco._garantir_colunas(conexao)
+        banco._garantir_colunas(conexao)                                             # pode rodar de novo
+        linha = conexao.execute("SELECT texto, midia_id FROM template_frases").fetchone()
+        self.assertEqual((linha["texto"], linha["midia_id"]), ("Antiga", None))      # antiga vale para todos
+
+    def test_gerar_para_video_usa_titulo_e_motivo(self):
+        cliente = ClienteFalso([resposta_falsa({"frases": ["So uma"]}),
+                                resposta_falsa({"frases": ["Quase ninguem viu esse detalhe", "Isso mudou o jogo?"]})])
+        resultado = self.frases.gerar_para_video("Detalhe escondido no trailer", "Gancho forte.", 2,
+                                                 usuario_id=1, cliente=cliente)
+        self.assertEqual(len(resultado), 2)
+        self.assertEqual(len(cliente.chamadas), 2)                                   # a primeira veio errada
+        mensagem = cliente.chamadas[0]["messages"][0]["content"]
+        self.assertIn("Detalhe escondido no trailer", mensagem)
+        self.assertIn("Gancho forte.", mensagem)
+        self.assertNotIn("{{", cliente.chamadas[0]["system"])
+        with self.assertRaises(ValueError):
+            self.frases.gerar_para_video("  ", None, 3, usuario_id=1)
+        with self.assertRaises(ValueError):
+            self.frases.gerar_para_video("Titulo", None, 99, usuario_id=1)
+
+    def test_api_gera_frases_por_video_e_um_erro_nao_derruba_os_outros(self):
+        from app import ia as modulo_ia
+        template_id = self.novo()
+        a = self.repo.adicionar_arquivo(template_id, "templates/x/a.mp4", "Trailer novo")
+        b = self.repo.adicionar_arquivo(template_id, "templates/x/b.mp4", "Mapa vazado")
+
+        def falso(titulo, motivo, quantidade, **_):
+            if titulo == "Mapa vazado":
+                raise modulo_ia.ErroIA("A IA nao respondeu.")
+            return [f"{titulo} frase {i}" for i in range(quantidade)]
+
+        url = f"/api/templates/{template_id}/frases/gerar-por-video"
+        with mock.patch.object(self.frases, "gerar_para_video", side_effect=falso):
+            r = self.cliente.post(url, json={"quantidade": 2})
+            self.assertEqual(r.status_code, 200)
+            dados = r.json()
+            self.assertEqual([v["midia_id"] for v in dados["videos"]], [a])
+            self.assertEqual([e["midia_id"] for e in dados["erros"]], [b])
+            self.assertEqual(dados["resumo"]["total"], 2)                            # so as frases do video A
+            self.assertEqual([f["midia_id"] for f in self.repo.listar_frases(template_id)], [a, a])
+            # um video so
+            r = self.cliente.post(url, json={"quantidade": 1, "midia_id": a})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(len(r.json()["videos"]), 1)
+            # video de outro template e quantidade ruim
+            outro = self.novo()
+            estranho = self.repo.adicionar_arquivo(outro, "templates/x/z.mp4", "Z")
+            self.assertEqual(self.cliente.post(url, json={"midia_id": estranho}).status_code, 404)
+            self.assertEqual(self.cliente.post(url, json={"quantidade": "muitas"}).status_code, 400)
+        # sem nenhum video escolhido
+        vazio = self.novo()
+        self.assertEqual(self.cliente.post(f"/api/templates/{vazio}/frases/gerar-por-video", json={}).status_code, 400)
+        # todos os videos com erro: avisa em vez de dizer que deu certo
+        with mock.patch.object(self.frases, "gerar_para_video", side_effect=modulo_ia.ErroIA("fora do ar")):
+            self.assertEqual(self.cliente.post(url, json={"quantidade": 1, "midia_id": b}).status_code, 502)
+
+    def test_api_adiciona_frase_a_um_video_do_proprio_template(self):
+        template_id = self.novo()
+        midia = self.repo.adicionar_arquivo(template_id, "templates/x/a.mp4", "A")
+        outro = self.novo()
+        estranha = self.repo.adicionar_arquivo(outro, "templates/x/z.mp4", "Z")
+        url = f"/api/templates/{template_id}/frases"
+        self.assertEqual(self.cliente.post(url, json={"textos": ["Minha frase"], "midia_id": midia}).status_code, 200)
+        self.assertEqual(self.repo.listar_frases(template_id)[0]["midia_id"], midia)
+        self.assertEqual(self.cliente.post(url, json={"textos": ["Outra"], "midia_id": estranha}).status_code, 404)
+        dados = self.cliente.get(f"/api/templates/{template_id}").json()
+        self.assertEqual(dados["frases"][0]["midia_id"], midia)
+
     def test_midia_valida_ajustes(self):
         template_id = self.novo()
         midia = self.repo.adicionar_arquivo(template_id, "templates/x/v.mp4", "v")
@@ -1115,8 +1217,10 @@ class TesteMigracaoDoBanco(unittest.TestCase):
                 self.assertEqual(c.execute("SELECT COUNT(*) FROM fila").fetchone()[0], 1)
                 self.assertEqual(c.execute("SELECT nome, layout FROM templates").fetchone()[:], ("Meu template", "post"))
                 self.assertEqual(c.execute("SELECT texto FROM template_frases").fetchone()[0], "Frase guardada")
-                # as tabelas filhas continuam apontando para `templates` (nao para a tabela antiga)
-                self.assertEqual([r["table"] for r in c.execute("PRAGMA foreign_key_list(template_frases)")], ["templates"])
+                # as tabelas filhas continuam apontando para `templates` (nao para a tabela antiga);
+                # a frase tambem aponta para o video (template_midias) a que pertence
+                self.assertEqual(sorted(r["table"] for r in c.execute("PRAGMA foreign_key_list(template_frases)")),
+                                 ["template_midias", "templates"])
                 self.assertEqual(c.execute("PRAGMA foreign_key_check").fetchall(), [])
                 # o que a trava antiga proibia agora entra
                 c.execute("INSERT INTO fila (usuario_id, tipo, alvo, rotulo) VALUES (1, 'baixar', 'u', 'u')")
