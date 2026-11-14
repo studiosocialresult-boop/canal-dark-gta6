@@ -52,10 +52,17 @@ def _erro_da_meta(resposta, contexto: str) -> ErroPostagem:
 # ---------- login ----------
 
 def endereco_de_login(retorno: str, estado: str) -> str:
+    """Apps criados na Meta a partir de 2026 usam o Login para Empresas: as permissoes ficam
+    guardadas numa "configuracao" e o endereco leva o numero dela (config_id) no lugar da lista de
+    escopos. Sem META_CONFIG_ID no .env, continua o login antigo por escopos (apps mais velhos)."""
     app_id, _ = _app()
-    return f"https://www.facebook.com/{config.VERSAO_META}/dialog/oauth?" + urlencode({
-        "client_id": app_id, "redirect_uri": retorno, "state": estado, "response_type": "code",
-        "scope": ",".join(ESCOPOS)})
+    pedido = {"client_id": app_id, "redirect_uri": retorno, "state": estado, "response_type": "code"}
+    config_id = (os.getenv("META_CONFIG_ID") or "").strip()
+    if config_id:
+        pedido |= {"config_id": config_id, "override_default_response_type": "true"}
+    else:
+        pedido["scope"] = ",".join(ESCOPOS)
+    return f"https://www.facebook.com/{config.VERSAO_META}/dialog/oauth?" + urlencode(pedido)
 
 
 def concluir_login(codigo: str, retorno: str) -> list[dict]:

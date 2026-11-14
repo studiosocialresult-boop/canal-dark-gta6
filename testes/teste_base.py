@@ -1530,6 +1530,21 @@ class TesteMeta(unittest.TestCase):
         ambiente = mock.patch.dict(os.environ, {"META_APP_ID": "app", "META_APP_SECRET": "seg"})
         ambiente.start(); self.addCleanup(ambiente.stop)
 
+    def test_login_usa_config_id_quando_existe(self):
+        from urllib.parse import parse_qs, urlparse
+        # app novo da Meta: as permissoes vivem na configuracao, o endereco leva o numero dela
+        with mock.patch.dict(os.environ, {"META_CONFIG_ID": "123456789"}):
+            q = parse_qs(urlparse(self.meta.endereco_de_login("https://painel/retorno/meta", "ESTADO")).query)
+        self.assertEqual((q["config_id"], q["override_default_response_type"], q["response_type"]),
+                         (["123456789"], ["true"], ["code"]))
+        self.assertNotIn("scope", q)
+        # app antigo: continua mandando a lista de permissoes
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("META_CONFIG_ID", None)
+            q = parse_qs(urlparse(self.meta.endereco_de_login("https://painel/retorno/meta", "ESTADO")).query)
+        self.assertIn("instagram_content_publish", q["scope"][0])
+        self.assertNotIn("config_id", q)
+
     def test_reel_do_instagram(self):
         arquivo = arquivo_de(4000)
         rede = RedeFalsa([

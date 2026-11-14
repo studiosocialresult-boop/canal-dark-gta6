@@ -26,6 +26,8 @@ CHAVES = [
     ("YOUTUBE_CLIENT_SECRET", "YouTube", "Chave secreta do cliente (Client secret)", "Aparece junto com o ID do cliente.", _TOKEN),
     ("META_APP_ID", "Instagram e Facebook", "ID do app", "Do painel de desenvolvedores da Meta.", r"\d{5,25}"),
     ("META_APP_SECRET", "Instagram e Facebook", "Chave secreta do app", "Configurações do app → Básico.", _TOKEN),
+    ("META_CONFIG_ID", "Instagram e Facebook", "ID da configuração de login",
+     "Login do Facebook para Empresas → Configurações: o número da configuração criada. Apps novos da Meta só fazem login por ele.", r"\d{5,25}"),
     ("TIKTOK_CLIENT_KEY", "TikTok", "Client key", "Do portal de desenvolvedores do TikTok.", _TOKEN),
     ("TIKTOK_CLIENT_SECRET", "TikTok", "Client secret", "Aparece junto com a client key.", _TOKEN),
 ]

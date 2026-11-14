@@ -5,7 +5,7 @@
   const { $, esc, icone, api, aviso } = Painel;
   const SERVICOS = {
     youtube: { nome: "YouTube Shorts", texto: "Envia como Short público. Até 100 envios por dia por projeto do Google.", passos: "Google Cloud: criar projeto, ativar a YouTube Data API v3, criar credencial OAuth (tipo Web) e colar o ID e o segredo no .env (YOUTUBE_CLIENT_ID e YOUTUBE_CLIENT_SECRET)." },
-    meta: { nome: "Instagram e Facebook", texto: "Um login da Meta conecta a sua Página do Facebook e o Instagram profissional ligado a ela. Facebook Reels aceita vídeos de 3 a 90 s.", passos: "Meta for Developers: criar app do tipo Empresa com Login do Facebook para Empresas e colar o ID e a chave secreta no .env (META_APP_ID e META_APP_SECRET)." },
+    meta: { nome: "Instagram e Facebook", texto: "Um login da Meta conecta a sua Página do Facebook e o Instagram profissional ligado a ela. Facebook Reels aceita vídeos de 3 a 90 s.", passos: "Meta for Developers: criar app do tipo Empresa, no caso de uso do Instagram criar uma configuração de login (token de usuário, com a Página e o Instagram) e colar o ID do app, a chave secreta e o número da configuração em Configurações → Chaves e integrações." },
     tiktok: { nome: "TikTok", texto: "Cada post pede sua escolha de privacidade e confirmação. Sem auditoria do app, só posta como 'Somente eu' em conta privada.", passos: "TikTok for Developers: criar app com Login Kit e Content Posting API (postagem direta) e colar a chave e o segredo no .env (TIKTOK_CLIENT_KEY e TIKTOK_CLIENT_SECRET)." },
   };
   const NOMES_REDE = { youtube: "YouTube", instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok" };
