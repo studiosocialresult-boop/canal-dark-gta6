@@ -10,3 +10,6 @@ dados/brutos/*
 dados/cortes/*
 !dados/cortes/.gitkeep
 cookies.txt
+
+# Gravacoes de tela (video de demonstracao) ficam fora do git
+deploy/marca/*.mp4

@@ -24,6 +24,7 @@ URL_SITUACAO = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
 ESCOPOS = ["user.info.basic", "video.publish"]
 MB = 1024 * 1024
 PEDACO = 10 * MB              # entre 5 e 64 MB, como a documentacao exige
+PEDACO_MAX = 64 * MB          # maior pedaco aceito: ate esse tamanho o video vai inteiro
 PRIVACIDADES = ("PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY")
 ESPERA_S = 600
 _dormir = time.sleep
@@ -112,8 +113,14 @@ def info_do_criador(credenciais: Credenciais) -> dict:
 
 
 def plano_de_pedacos(tamanho: int) -> tuple[int, int]:
-    """(tamanho do pedaco, quantidade). Abaixo de 5 MB vai inteiro; o ultimo pedaco absorve o resto."""
-    if tamanho < 5 * MB:
+    """(tamanho do pedaco, quantidade).
+
+    Ate 64 MB o video vai inteiro num pedaco so (o pedaco tem o tamanho do arquivo), que e o que a
+    documentacao manda e o que o TikTok aceita. Acima disso, pedacos de 10 MB e o ultimo absorve o resto.
+    O pedaco nunca pode ser maior que o arquivo: era o que fazia o TikTok responder
+    "The chunk size is invalid" em videos entre 5 e 64 MB.
+    """
+    if tamanho <= PEDACO_MAX:
         return tamanho, 1
     return PEDACO, max(1, math.floor(tamanho / PEDACO))
 

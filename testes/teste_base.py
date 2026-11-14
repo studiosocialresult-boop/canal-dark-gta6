@@ -1646,9 +1646,12 @@ class TesteTikTok(unittest.TestCase):
     def test_plano_de_pedacos_segue_a_documentacao(self):
         mb = self.tt.MB
         self.assertEqual(self.tt.plano_de_pedacos(4 * mb), (4 * mb, 1))             # menor que 5 MB: inteiro
-        tamanho, quantidade = self.tt.plano_de_pedacos(50_000_123)
-        self.assertEqual(quantidade, 50_000_123 // tamanho)
-        ultimo = 50_000_123 - (quantidade - 1) * tamanho
+        # Ate 64 MB vai inteiro: o pedaco nunca pode ser maior que o arquivo (era o "chunk size is invalid").
+        for tamanho_do_corte in (7 * mb, 16 * mb + 500, 64 * mb):
+            self.assertEqual(self.tt.plano_de_pedacos(tamanho_do_corte), (tamanho_do_corte, 1))
+        tamanho, quantidade = self.tt.plano_de_pedacos(500_000_123)
+        self.assertEqual(quantidade, 500_000_123 // tamanho)
+        ultimo = 500_000_123 - (quantidade - 1) * tamanho
         self.assertTrue(5 * mb <= tamanho <= 64 * mb and ultimo <= 128 * mb)
 
     def test_posta_com_a_privacidade_escolhida(self):
