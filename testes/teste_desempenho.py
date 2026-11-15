@@ -155,5 +155,50 @@ class TesteRepositorio(unittest.TestCase):
             self.assertIn("removida_em", [l["name"] for l in c.execute("PRAGMA table_info(publicacoes)")])
 
 
+class TesteNumerosYoutube(unittest.TestCase):
+    def setUp(self):
+        from app.postagem import youtube
+        self.yt = youtube
+        renovar = mock.patch.object(youtube, "_renovar", return_value="TOKEN")
+        renovar.start()
+        self.addCleanup(renovar.stop)
+        self.cred = Credenciais({"access_token": "A", "refresh_token": "R"})
+
+    def test_le_numeros_e_deixa_vazio_o_que_a_rede_esconde(self):
+        resposta = resposta_http(200, {"items": [
+            {"id": "aaa", "statistics": {"viewCount": "1200", "likeCount": "80", "commentCount": "7"}},
+            {"id": "bbb", "statistics": {"viewCount": "15"}}]})
+        with mock.patch.object(self.yt, "chamar", return_value=resposta) as chamar:
+            numeros = self.yt.ler_numeros(self.cred, ["aaa", "bbb", "sumiu"])
+        self.assertEqual(numeros, {"aaa": Numeros(1200, 80, 7), "bbb": Numeros(15, None, None)})
+        self.assertEqual(chamar.call_args.kwargs["params"], {"part": "statistics", "id": "aaa,bbb,sumiu"})
+        self.assertEqual(chamar.call_args.kwargs["headers"], {"Authorization": "Bearer TOKEN"})
+
+    def test_lotes_de_50(self):
+        with mock.patch.object(self.yt, "chamar", return_value=resposta_http(200, {"items": []})) as chamar:
+            self.yt.ler_numeros(self.cred, [f"v{i}" for i in range(120)])
+        self.assertEqual(chamar.call_count, 3)
+
+    def test_lista_vazia_nao_chama_a_rede(self):
+        with mock.patch.object(self.yt, "chamar") as chamar:
+            self.assertEqual(self.yt.ler_numeros(self.cred, []), {})
+        chamar.assert_not_called()
+
+    def test_403_nao_pede_reconexao(self):
+        erro = {"error": {"message": "sem permissao", "errors": [{"reason": "insufficientPermissions"}]}}
+        with mock.patch.object(self.yt, "chamar", return_value=resposta_http(403, erro)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.yt.ler_numeros(self.cred, ["aaa"])
+        self.assertFalse(c.exception.reconectar)
+        self.assertFalse(c.exception.temporario)
+
+    def test_cota_estourada_e_temporaria(self):
+        erro = {"error": {"message": "cota", "errors": [{"reason": "quotaExceeded"}]}}
+        with mock.patch.object(self.yt, "chamar", return_value=resposta_http(403, erro)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.yt.ler_numeros(self.cred, ["aaa"])
+        self.assertTrue(c.exception.temporario)
+
+
 if __name__ == "__main__":
     unittest.main()
