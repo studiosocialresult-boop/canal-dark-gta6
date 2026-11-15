@@ -200,5 +200,84 @@ class TesteNumerosYoutube(unittest.TestCase):
         self.assertTrue(c.exception.temporario)
 
 
+def erro_meta(codigo: int, subcodigo: int | None = None, status: int = 400):
+    erro = {"code": codigo, "message": "erro da meta"}
+    if subcodigo is not None:
+        erro["error_subcode"] = subcodigo
+    return resposta_http(status, {"error": erro})
+
+
+class TesteNumerosMeta(unittest.TestCase):
+    def setUp(self):
+        from app.postagem import meta
+        self.meta = meta
+        self.cred_ig = Credenciais({"page_token": "TOKEN", "ig_id": "IG"})
+        self.cred_fb = Credenciais({"page_token": "TOKEN", "page_id": "PG"})
+
+    def test_instagram_le_visualizacoes_curtidas_e_comentarios(self):
+        resposta = resposta_http(200, {
+            "m1": {"id": "m1", "like_count": 40, "comments_count": 3, "total_views_count": 900},
+            "m2": {"id": "m2", "comments_count": 0}})          # curtidas ocultas pelo dono
+        with mock.patch.object(self.meta, "chamar", return_value=resposta) as chamar:
+            numeros = self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"])
+        self.assertEqual(numeros, {"m1": Numeros(900, 40, 3), "m2": Numeros(None, None, 0)})
+        params = chamar.call_args.kwargs["params"]
+        self.assertEqual(params["ids"], "m1,m2")
+        self.assertEqual(params["access_token"], "TOKEN")
+
+    def test_facebook_le_curtidas_e_comentarios(self):
+        resposta = resposta_http(200, {
+            "v1": {"id": "v1", "likes": {"data": [], "summary": {"total_count": 12}},
+                   "comments": {"data": [], "summary": {"total_count": 2}}}})
+        with mock.patch.object(self.meta, "chamar", return_value=resposta):
+            self.assertEqual(self.meta.ler_numeros_facebook(self.cred_fb, ["v1"]), {"v1": Numeros(None, 12, 2)})
+
+    def test_lista_vazia_nao_chama_a_rede(self):
+        with mock.patch.object(self.meta, "chamar") as chamar:
+            self.assertEqual(self.meta.ler_numeros_instagram(self.cred_ig, []), {})
+        chamar.assert_not_called()
+
+    def test_post_apagado_fica_fora_do_resultado(self):
+        # o lote falha por causa do post apagado; um por um, so ele volta "nao existe"
+        def chamar(metodo, url, **kwargs):
+            if "ids" in kwargs["params"]:
+                return erro_meta(100, 33)
+            if url.endswith("/m2"):
+                return erro_meta(100, 33)
+            return resposta_http(200, {"id": "m1", "like_count": 5, "comments_count": 1})
+        with mock.patch.object(self.meta, "chamar", side_effect=chamar):
+            self.assertEqual(self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"]), {"m1": Numeros(None, 5, 1)})
+
+    def test_nenhum_post_lido_nao_marca_todos_como_apagados(self):
+        with mock.patch.object(self.meta, "chamar", return_value=erro_meta(100, 33)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"])
+        self.assertFalse(c.exception.reconectar)
+
+    def test_rede_fora_do_ar_levanta_erro_temporario(self):
+        with mock.patch.object(self.meta, "chamar", side_effect=ErroPostagem("fora", temporario=True)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_instagram(self.cred_ig, ["m1"])
+        self.assertTrue(c.exception.temporario)
+
+    def test_limite_de_uso_e_temporario(self):
+        with mock.patch.object(self.meta, "chamar", return_value=erro_meta(80001)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_facebook(self.cred_fb, ["v1"])
+        self.assertTrue(c.exception.temporario)
+
+    def test_erro_de_permissao_nao_pede_reconexao(self):
+        with mock.patch.object(self.meta, "chamar", return_value=erro_meta(10, status=403)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_facebook(self.cred_fb, ["v1"])
+        self.assertFalse(c.exception.reconectar)
+
+    def test_token_vencido_pede_reconexao(self):
+        with mock.patch.object(self.meta, "chamar", return_value=erro_meta(190, 463)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_instagram(self.cred_ig, ["m1"])
+        self.assertTrue(c.exception.reconectar)
+
+
 if __name__ == "__main__":
     unittest.main()

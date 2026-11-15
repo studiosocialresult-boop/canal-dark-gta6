@@ -289,6 +289,12 @@ Evitar `max`: custa muito e costuma pensar demais.
 - **Fora desta fase:** a IA aprender com os números e o agendador escolher horário sozinho (ficam para depois, usando os dados guardados aqui).
 - **Pronto quando:** com posts reais, os números do YouTube aparecem na tela em até uma hora, a foto de 24 h é guardada no dia seguinte e o total aparece no cartão do corte.
 - **Modelo:** Opus 5.5 (high) para a leitura nas redes; Sonnet 5.5 (medium) para banco, relatório e tela.
+- **Conferido na documentação da Meta (Graph API v27.0, 14/11/2026):**
+  - Instagram: o próprio post traz `like_count`, `comments_count` e `total_views_count` (visualizações em todas as superfícies) com as permissões que o app **já tem** (`instagram_basic` + `pages_read_engagement`). Por isso o Instagram entra **com visualizações** já. Se o dono ocultar as curtidas, o número não vem (fica vazio). As "estatísticas" (insights) pediriam `instagram_manage_insights`: não usadas.
+  - Facebook: curtidas e comentários pelos resumos (`likes.summary(true)`, `comments.summary(true)`) do vídeo. Visualizações só em `video_insights`, que pede `read_insights` e `pages_manage_engagement` (o app não tem): ficam vazias até o dono acrescentar essas permissões.
+  - Vários posts numa chamada (`?ids=...`); cada id conta como uma chamada no limite de uso. A documentação não diz o que acontece quando um dos posts foi apagado: se o lote for recusado, o painel lê um por um.
+  - Códigos de erro: 190 = acesso vencido (pede reconectar); 4, 17, 32, 341, 613, 80001, 80002 = limite de uso (espera); 10 e 200–299 = permissão (na leitura, só registra; não pede reconectar).
+  - **Falta conferir ao vivo na VPS** (o teste local usa respostas simuladas): se `total_views_count` vem preenchido nos Reels e se os resumos de curtidas/comentários funcionam nos Reels do Facebook.
 
 ## 7. Contas e chaves necessárias
 
