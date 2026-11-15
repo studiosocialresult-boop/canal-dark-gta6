@@ -21,7 +21,7 @@ from app import avisos, banco, config
 from app.download import baixar
 from app.busca import diaria
 from app.desempenho import coletor
-from app.painel import api_busca, api_chaves, api_perfis, api_postagem, api_templates, fila
+from app.painel import api_busca, api_chaves, api_desempenho, api_perfis, api_postagem, api_templates, fila
 from app.postagem import agendador
 
 PASTA = Path(__file__).resolve().parent
@@ -44,6 +44,8 @@ MENU = [
      "descricao": "Ajuste rápido de um vídeo para o formato vertical."},
     {"id": "agenda", "nome": "Agenda", "icone": "calendario", "fase": 5, "pronto": True,
      "descricao": "O calendário do que está agendado em cada conta, rede por rede."},
+    {"id": "desempenho", "nome": "Desempenho", "icone": "grafico", "fase": 8, "pronto": True,
+     "descricao": "Quanto cada post rendeu e o que está funcionando."},
     {"id": "contas", "nome": "Contas", "icone": "plug", "fase": 5, "pronto": True,
      "descricao": "Conecte YouTube, Instagram, TikTok e Facebook para publicar daqui."},
 ]
@@ -142,6 +144,7 @@ def criar_app() -> FastAPI:
     api_templates.registrar(app, paginas, contexto)
     api_perfis.registrar(app, paginas, contexto)
     api_postagem.registrar(app, paginas, contexto)
+    api_desempenho.registrar(app, paginas, contexto)
     api_busca.registrar(app, paginas, contexto)
     api_chaves.registrar(app)
 

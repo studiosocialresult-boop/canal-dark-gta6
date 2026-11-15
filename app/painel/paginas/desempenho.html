@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block titulo %}Desempenho{% endblock %}
+
+{% block conteudo %}
+<section class="cartao cabecalho">
+  <div class="cabecalho-icone"><svg class="i"><use href="#i-grafico"/></svg></div>
+  <div>
+    <h1>Desempenho</h1>
+    <p>Quanto cada post rendeu nas redes e o que está funcionando. Os números são lidos nas redes de hora em hora.</p>
+  </div>
+</section>
+
+<section class="barra-ferramentas">
+  <div class="abas" id="sel-periodo">
+    <button class="aba ativa" data-dias="7">7 dias</button>
+    <button class="aba" data-dias="30">30 dias</button>
+    <button class="aba" data-dias="90">90 dias</button>
+  </div>
+  <div class="abas" id="sel-medida">
+    <button class="aba ativa" data-medida="visualizacoes">Visualizações</button>
+    <button class="aba" data-medida="curtidas">Curtidas</button>
+    <button class="aba" data-medida="comentarios">Comentários</button>
+  </div>
+  <div class="filtros"><select class="campo-select" id="filtro-conta"><option value="">Todas as contas</option></select></div>
+  <button class="botao" id="atualizar" style="margin-left:auto"><svg class="i"><use href="#i-refazer"/></svg><span>Atualizar agora</span></button>
+</section>
+
+<div id="aviso-sem-medida"></div>
+
+<section class="numeros" id="cartoes"></section>
+
+<div id="vazio"></div>
+
+<section class="cartao desempenho-grupos" id="grupos-cartao">
+  <h2>O que está funcionando</h2>
+  <p class="dica">Média por post, com 24 horas de vida</p>
+  <div id="grupos"></div>
+</section>
+
+<section class="cartao desempenho-lista" id="melhores-cartao">
+  <h2>Melhores posts</h2>
+  <div id="melhores"></div>
+</section>
+
+<section class="cartao desempenho-lista" id="piores-cartao">
+  <h2>Posts que não renderam</h2>
+  <div id="piores"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}<script src="/estatico/desempenho.js"></script>{% endblock %}

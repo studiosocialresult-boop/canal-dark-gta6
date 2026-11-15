@@ -506,5 +506,42 @@ class TesteRelatorio(unittest.TestCase):
         self.assertEqual(r["totais"]["melhor_horario"], {"inicio_h": 19, "fim_h": 21})
 
 
+class TesteTelaDesempenho(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+        from app.painel import servidor
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        limpar()
+
+    def test_pagina_e_menu(self):
+        resposta = self.cliente.get("/desempenho")
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Desempenho", resposta.text)
+        self.assertIn('href="/desempenho"', self.cliente.get("/cortes").text)
+
+    def test_api_sem_dados(self):
+        dados = self.cliente.get("/api/desempenho").json()
+        self.assertEqual((dados["dias"], dados["medida"], dados["totais"]["posts"]), (7, "visualizacoes", 0))
+
+    def test_api_com_filtros(self):
+        dados = self.cliente.get("/api/desempenho?dias=30&medida=curtidas").json()
+        self.assertEqual((dados["dias"], dados["medida"]), (30, "curtidas"))
+
+    def test_pedido_invalido_da_400(self):
+        for consulta in ("dias=5", "medida=alcance", "dias=abc", "conta_id=x"):
+            resposta = self.cliente.get(f"/api/desempenho?{consulta}")
+            self.assertEqual(resposta.status_code, 400, consulta)
+            self.assertIn("erro", resposta.json())
+
+    def test_atualizar_agora(self):
+        with mock.patch("app.desempenho.coletor.rodar",
+                        return_value={"lidas": 3, "removidas": 0, "falhas": 0, "ocupado": False}):
+            self.assertEqual(self.cliente.post("/api/desempenho/atualizar").json()["lidas"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

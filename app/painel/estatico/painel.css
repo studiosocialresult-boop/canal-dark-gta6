@@ -592,3 +592,29 @@ code.codigo { display: block; padding: 8px 10px; border-radius: 9px; background:
   .retorno { grid-template-columns: 1fr auto; }
   .retorno small { grid-column: 1 / -1; }
 }
+
+/* ---------- Desempenho ---------- */
+.desempenho-grupos, .desempenho-lista { padding: 18px 20px; margin-bottom: 16px; }
+.desempenho-grupos h2, .desempenho-lista h2 { margin: 0; font-size: 17px; letter-spacing: -.02em; }
+.desempenho-grupos .dica { margin: 2px 0 12px; }
+.grupo-linha { display: grid; grid-template-columns: 90px 1fr; gap: 12px; align-items: start; padding: 10px 0; border-top: 1px solid var(--linha); }
+.grupo-linha > b { color: var(--suave); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; padding-top: 5px; }
+.chips-grupo { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-grupo { display: inline-flex; gap: 6px; align-items: baseline; padding: 5px 11px; border-radius: 99px; border: 1px solid var(--linha); background: var(--cartao-2); }
+.chip-grupo em { font-style: normal; color: var(--suave); }
+.chip-grupo small { color: var(--suave); }
+.barras-hora { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; height: 92px; align-items: end; }
+.barra-hora { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 3px; }
+.barra-hora span { width: 100%; background: var(--acento); border-radius: 3px 3px 0 0; min-height: 0; }
+.barra-hora small { font-size: 9px; color: var(--suave); }
+.tabela-posts { display: grid; margin-top: 10px; }
+.linha-post { display: grid; grid-template-columns: minmax(0, 1fr) repeat(4, 76px); gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--linha); text-align: right; }
+.linha-post.cabeca { border-top: 0; color: var(--suave); font-size: 12px; font-weight: 700; }
+.linha-post .titulo-post { text-align: left; display: grid; gap: 2px; min-width: 0; }
+.linha-post .titulo-post a:first-child { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.linha-post .titulo-post small { color: var(--suave); }
+@media (max-width: 640px) {
+  .grupo-linha { grid-template-columns: 1fr; gap: 4px; }
+  .linha-post { grid-template-columns: minmax(0, 1fr) repeat(4, 54px); font-size: 12px; }
+  .barras-hora small { display: none; }
+}
