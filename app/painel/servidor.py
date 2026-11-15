@@ -163,7 +163,8 @@ def criar_app() -> FastAPI:
     def api_cortes():
         visualizacoes = repositorio_desempenho.visualizacoes_por_corte(USUARIO)      # uma consulta so
         situacao = repositorio_templates.situacao_dos_cortes(USUARIO)
-        return {"cortes": [_corte_json(l, visualizacoes.get(l["id"]), situacao.get(l["id"]))
+        postagens = repositorio_desempenho.postagens_por_corte(USUARIO)
+        return {"cortes": [_corte_json(l, visualizacoes.get(l["id"]), situacao.get(l["id"]), postagens.get(l["id"]))
                            for l in banco.listar_cortes(USUARIO)
                            if l["estado"] in ESTADOS_REVISAVEIS],
                 "numeros": _numeros()}
@@ -301,7 +302,8 @@ def _corte_do_dono(corte_id: int):
     return corte
 
 
-def _corte_json(l, visualizacoes: int | None = None, situacao: dict | None = None) -> dict:
+def _corte_json(l, visualizacoes: int | None = None, situacao: dict | None = None,
+                postagem: dict | None = None) -> dict:
     arquivo = l["caminho_arquivo"]
     situacao = situacao or {"pronta": None, "preparando": False, "agendado": False}
     pronta = situacao["pronta"]
@@ -317,7 +319,7 @@ def _corte_json(l, visualizacoes: int | None = None, situacao: dict | None = Non
         "canal": l["video_canal"] or "", "video_titulo": l["video_titulo"] or "",
         "video_url": l["video_url"], "plataforma": l["video_plataforma"],
         "narracao": l["narracao_estado"], "custo_usd": round(l["custo_usd"], 3),
-        "criado_em": l["criado_em"], "visualizacoes": visualizacoes,
+        "criado_em": l["criado_em"], "visualizacoes": visualizacoes, "postagem": postagem,
         "midia": f"/midia/{arquivo}" if arquivo else None,
         "miniatura": f"/miniatura/{l['id']}.jpg" if arquivo else None,
     }

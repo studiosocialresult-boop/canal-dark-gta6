@@ -90,5 +90,28 @@ def visualizacoes_por_corte(usuario_id: int) -> dict[int, int]:
             "AND l.visualizacoes IS NOT NULL GROUP BY p.corte_id", (usuario_id,))}
 
 
+def postagens_por_corte(usuario_id: int) -> dict[int, dict]:
+    """Por corte ja publicado: em quais redes saiu e a soma de visualizacoes, curtidas e comentarios
+    (leitura mais recente de cada post). Numero ainda nao lido vem como None."""
+    resultado: dict[int, dict] = {}
+    with closing(banco.conectar()) as conexao:
+        for l in conexao.execute(
+                "SELECT p.corte_id, c.rede, p.url, l.visualizacoes AS v, l.curtidas AS c, l.comentarios AS m "
+                "FROM publicacoes p JOIN contas c ON c.id = p.conta_id "
+                "LEFT JOIN leituras l ON l.publicacao_id = p.id AND l.marco = 'atual' "
+                "WHERE p.usuario_id = ? AND p.estado = 'publicada' AND p.removida_em IS NULL "
+                "AND p.corte_id IS NOT NULL", (usuario_id,)):
+            info = resultado.setdefault(l["corte_id"], {"redes": [], "links": [], "visualizacoes": None,
+                                                         "curtidas": None, "comentarios": None})
+            if l["rede"] not in info["redes"]:
+                info["redes"].append(l["rede"])
+            if l["url"]:
+                info["links"].append({"rede": l["rede"], "url": l["url"]})
+            for chave, valor in (("visualizacoes", l["v"]), ("curtidas", l["c"]), ("comentarios", l["m"])):
+                if valor is not None:
+                    info[chave] = (info[chave] or 0) + valor
+    return resultado
+
+
 def _lugares(itens: list) -> str:
     return ", ".join("?" * len(itens))

@@ -31,10 +31,14 @@
   /** Pronto para agendar: tem o vídeo no template e ainda não foi agendado. */
   const prontoParaAgendar = (c) => !!c.pronta && !c.agendado && !["descartado", "falhou"].includes(c.estado);
 
+  /** Já publicado em pelo menos uma rede. */
+  const postado = (c) => !!c.postagem;
+
   const ABAS = {
-    revisar: (c) => (c.estado === "renderizado" || c.estado === "proposto") && !prontoParaAgendar(c),
-    aprovado: (c) => c.estado === "aprovado" && !prontoParaAgendar(c),
+    revisar: (c) => (c.estado === "renderizado" || c.estado === "proposto") && !prontoParaAgendar(c) && !postado(c),
+    aprovado: (c) => c.estado === "aprovado" && !prontoParaAgendar(c) && !postado(c),
     prontos: prontoParaAgendar,
+    postados: postado,
     descartado: (c) => c.estado === "descartado",
     todos: () => true,
   };
@@ -49,6 +53,7 @@
       novos: (a, b) => b.id - a.id,
       nota: (a, b) => b.nota - a.nota || b.id - a.id,
       curtos: (a, b) => a.duracao_s - b.duracao_s,
+      views: (a, b) => (b.postagem?.visualizacoes ?? -1) - (a.postagem?.visualizacoes ?? -1) || b.id - a.id,
     }[estado.ordem];
     return lista.sort(ordem);
   }
@@ -56,6 +61,20 @@
   // ---------- grade ----------
 
   const corDaNota = (n) => (n >= 80 ? "#3ccf7a" : n >= 65 ? "#ffb02e" : "#ff6b70");
+
+  const NOMES_REDES = { youtube: "YouTube", instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok" };
+  const numero = (n) => (n == null ? "–" : n.toLocaleString("pt-BR"));
+
+  /** Pé do cartão na aba Postados: visualizações, curtidas e comentários somados de todas as redes. */
+  function pePostado(c) {
+    const p = c.postagem;
+    const redes = p.redes.map((r) => NOMES_REDES[r] || r).join(", ");
+    return `<div class="corte-pe corte-metricas" title="Publicado em: ${esc(redes)}. Soma de todas as redes.">
+      <span title="Visualizações">👁 <b>${numero(p.visualizacoes)}</b></span>
+      <span title="Curtidas">❤ <b>${numero(p.curtidas)}</b></span>
+      <span title="Comentários">💬 <b>${numero(p.comentarios)}</b></span>
+      <span class="corte-redes">${esc(redes)}</span></div>`;
+  }
 
   function cartao(c, indice) {
     const selo = c.estado === "aprovado" ? '<span class="tag estado-aprovado">Aprovado</span>'
@@ -65,6 +84,7 @@
       : c.modo === "narrado" ? '<span class="tag">Sem voz</span>' : '<span class="tag">Original</span>';
     const situacao = c.preparando ? '<span class="tag">Preparando…</span>'
       : prontoParaAgendar(c) ? '<span class="tag estado-pronto">Pronto para agendar</span>'
+      : postado(c) ? '<span class="tag estado-aprovado">Postado</span>'
       : c.agendado ? '<span class="tag">Agendado</span>' : "";
     const imagem = c.pronta ? c.pronta.miniatura : c.miniatura;
     const marcado = estado.selecionados.has(c.id);
@@ -82,22 +102,23 @@
         </div>
         <div class="corte-titulo">${esc(c.titulo)}</div>
       </div>
-      <div class="corte-pe">
+      ${estado.aba === "postados" && postado(c) ? pePostado(c) : `<div class="corte-pe">
         <div class="corte-fonte" title="${esc(c.video_titulo)}"><b>${esc(c.canal || "—")}</b> · ${Math.round(c.duracao_s)} s${c.visualizacoes != null ? ` · <a href="/desempenho" title="Ver o desempenho">${c.visualizacoes.toLocaleString("pt-BR")} visualizações</a>` : ""}</div>
         ${acoes}
-      </div></article>`;
+      </div>`}</article>`;
   }
 
   function desenhar() {
     const n = estado.numeros;
     $("#n-revisar").textContent = n.revisar;
-    $("#n-aprovados").textContent = n.aprovados;
+    $("#n-aprovados").textContent = estado.cortes.filter((c) => c.estado === "aprovado" && !postado(c)).length;
     $("#n-hoje").textContent = n.cortes_hoje;
     const custos = estado.cortes.filter((c) => c.custo_usd > 0).map((c) => c.custo_usd);
     $("#n-custo").textContent = custos.length ? dolar(custos.reduce((a, b) => a + b, 0) / custos.length) : "–";
     $("#aba-revisar").textContent = n.revisar;
     $("#aba-aprovado").textContent = estado.cortes.filter(ABAS.aprovado).length;
     $("#aba-prontos").textContent = estado.cortes.filter(ABAS.prontos).length;
+    $("#aba-postados").textContent = estado.cortes.filter(ABAS.postados).length;
     $("#aba-descartado").textContent = n.descartados;
     $("#aba-todos").textContent = estado.cortes.length;
 
@@ -110,6 +131,7 @@
     } else if (!lista.length) {
       const porAba = { revisar: "Nada esperando revisão. Bom trabalho!", aprovado: "Nenhum corte aprovado esperando template.",
                        prontos: "Nenhum corte pronto para agendar. Selecione cortes e clique em “Preparar com template”.",
+                       postados: "Nenhum corte foi publicado ainda. Quando um post sair, ele aparece aqui com os números.",
                        descartado: "Nenhum corte descartado.", todos: "Nenhum corte combina com os filtros." };
       grade.innerHTML = `<div class="cartao vazio" style="grid-column:1/-1"><h2>${porAba[estado.aba]}</h2>
         <p>${estado.busca || estado.modos.size ? "Tente limpar a busca ou os filtros." : "Quando novos cortes ficarem prontos, eles aparecem aqui."}</p></div>`;

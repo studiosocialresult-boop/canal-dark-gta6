@@ -217,6 +217,9 @@ select.campo-select { padding: 8px 12px; border-radius: 11px; border: 1px solid 
 .corte-pe { display: flex; align-items: center; gap: 6px; padding: 9px 10px 9px 12px; }
 .corte-fonte { flex: 1; min-width: 0; color: var(--suave); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .corte-fonte b { color: var(--texto); font-weight: 600; }
+.corte-metricas { gap: 10px; font-size: 12px; color: var(--suave); flex-wrap: wrap; }
+.corte-metricas b { color: var(--texto); font-weight: 600; }
+.corte-metricas .corte-redes { flex-basis: 100%; font-size: 11px; opacity: .8; }
 .mini { width: 30px; height: 30px; border-radius: 9px; border: 1px solid var(--linha); background: var(--cartao-2);
         display: grid; place-items: center; color: var(--suave); transition: .15s; }
 .mini svg { width: 15px; height: 15px; }
