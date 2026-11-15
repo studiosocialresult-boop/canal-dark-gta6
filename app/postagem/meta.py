@@ -11,6 +11,8 @@ Tokens: o token de Pagina obtido de um token de usuario de longa duracao nao exp
 invalidado se a senha mudar ou o acesso for retirado). Conferido na documentacao em 13/11/2026.
 """
 import os
+import secrets
+import shutil
 import time
 from pathlib import Path
 from urllib.parse import urlencode
@@ -29,6 +31,7 @@ ESPERA_PROCESSAMENTO_S = 600
 INTERVALO_CONSULTA_S = 10
 TENTATIVAS_ENVIO_IG = 4       # o envio ao Instagram as vezes falha a toa; tenta de novo na hora
 ESPERA_ENTRE_ENVIOS_S = 30
+VIDA_LINK_PUBLICO_S = 3600    # link publico que sobrar de um envio interrompido e apagado depois de 1 h
 _dormir = time.sleep          # trocado nos testes
 
 
@@ -178,9 +181,45 @@ def _enviar_arquivo(url: str, token: str, arquivo: Path, rede: str) -> None:
 
 # ---------- Instagram Reels ----------
 
+def _limpar_videos_publicos() -> None:
+    """Apaga links que sobraram (ex.: o painel caiu no meio de um envio). Nada fica publico por muito tempo."""
+    limite = time.time() - VIDA_LINK_PUBLICO_S
+    for antigo in config.PASTA_VIDEOS_PUBLICOS.glob("*.mp4"):
+        try:
+            if antigo.stat().st_mtime < limite:
+                antigo.unlink()
+        except OSError:
+            pass
+
+
+def _criar_por_link(token: str, ig_id: str, arquivo: Path, legenda: str) -> tuple[str, Path]:
+    """Poe uma copia do video num link publico de nome sorteado e pede para a Meta baixar dali."""
+    config.PASTA_VIDEOS_PUBLICOS.mkdir(parents=True, exist_ok=True)
+    _limpar_videos_publicos()
+    publico = config.PASTA_VIDEOS_PUBLICOS / f"{secrets.token_urlsafe(24)}.mp4"
+    try:
+        os.link(arquivo, publico)              # mesmo disco: nao gasta espaco
+    except OSError:
+        shutil.copyfile(arquivo, publico)
+    criar = chamar("POST", f"{GRAPH}/{ig_id}/media", rede="instagram", data={
+        "media_type": "REELS", "video_url": f"{config.URL_VIDEOS_PUBLICOS}/{publico.name}",
+        "caption": legenda[:2200], "access_token": token})
+    dados = json_ou_vazio(criar)
+    if criar.status_code != 200 or "id" not in dados:
+        publico.unlink(missing_ok=True)
+        raise _erro_da_meta(criar, "criar o Reel")
+    return dados["id"], publico
+
+
 def publicar_instagram(credenciais: Credenciais, arquivo: Path, titulo: str, legenda: str,
                        opcoes: dict | None = None) -> Resultado:
     token, ig_id = credenciais["page_token"], credenciais["ig_id"]
+    if config.URL_VIDEOS_PUBLICOS:
+        container, publico = _criar_por_link(token, ig_id, arquivo, legenda)
+        try:
+            return _esperar_e_publicar(token, ig_id, container)
+        finally:
+            publico.unlink(missing_ok=True)    # a Meta ja baixou (ou desistiu): o link some
     for tentativa in range(1, TENTATIVAS_ENVIO_IG + 1):
         criar = chamar("POST", f"{GRAPH}/{ig_id}/media", rede="instagram", data={
             "media_type": "REELS", "upload_type": "resumable", "caption": legenda[:2200], "access_token": token})
@@ -198,7 +237,10 @@ def publicar_instagram(credenciais: Credenciais, arquivo: Path, titulo: str, leg
                 raise
             log.info("Instagram: envio falhou (tentativa %d de %d): %s", tentativa, TENTATIVAS_ENVIO_IG, erro)
             _dormir(ESPERA_ENTRE_ENVIOS_S)
+    return _esperar_e_publicar(token, ig_id, container)
 
+
+def _esperar_e_publicar(token: str, ig_id: str, container: str) -> Resultado:
     limite = time.monotonic() + ESPERA_PROCESSAMENTO_S
     while True:
         estado = chamar("GET", f"{GRAPH}/{container}", rede="instagram",

@@ -28,9 +28,9 @@ RAIZ = Path(__file__).resolve().parent.parent
 PASTA_REMOTA = "canal-dark"                 # dentro da pasta do usuario na VPS
 # Linhas do .env que valem so neste computador.
 SO_NO_COMPUTADOR = ("CANAL_PAINEL_DE_TESTE=", "CANAL_URL_PAINEL=", "CANAL_VPS=", "CANAL_VPS_CHAVE=",
-                    "CANAL_PASTA_DADOS=", "CANAL_COOKIES=")
+                    "CANAL_PASTA_DADOS=", "CANAL_COOKIES=", "CANAL_URL_VIDEOS_PUBLICOS=")
 # Dentro de dados/: o que nao vai para a VPS (videos brutos sao baixados de novo se precisar).
-DADOS_FORA = {"brutos", "tmp", "logs", "canal.db", "canal.db-journal", "canal.db-wal", "canal.db-shm"}
+DADOS_FORA = {"brutos", "tmp", "logs", "publico", "canal.db", "canal.db-journal", "canal.db-wal", "canal.db-shm"}
 
 
 class Falha(Exception):

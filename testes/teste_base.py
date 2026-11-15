@@ -1811,6 +1811,33 @@ class TesteMeta(unittest.TestCase):
         self.assertTrue(erro.exception.temporario)
         self.assertEqual(sum(1 for c in rede.chamadas if "rupload" in c[1]), self.meta.TENTATIVAS_ENVIO_IG)
 
+    def test_reel_do_instagram_por_link_publico(self):
+        arquivo = arquivo_de(700)
+        pasta = Path(tempfile.mkdtemp(prefix="publico_"))
+        visto = {}
+
+        def criar(_m, _u, kw):
+            # no momento em que a Meta e chamada, o video ja esta no link publico
+            nome = kw["data"]["video_url"].rsplit("/", 1)[1]
+            visto["nome"], visto["existia"] = nome, (pasta / nome).exists()
+            return Resposta(200, {"id": "C1"})
+        rede = RedeFalsa([
+            ("POST", "/IG1/media_publish", Resposta(200, {"id": "M9"})),
+            ("POST", "/IG1/media", criar),
+            ("GET", "/C1", Resposta(200, {"status_code": "FINISHED"})),
+            ("GET", "/M9", Resposta(200, {"permalink": "https://www.instagram.com/reel/XYZ/"})),
+        ])
+        with mock.patch.object(self.meta.config, "URL_VIDEOS_PUBLICOS", "https://exemplo:8443/videos"), \
+                mock.patch.object(self.meta.config, "PASTA_VIDEOS_PUBLICOS", pasta), rede.ativar():
+            r = self.meta.publicar_instagram(self.Credenciais({"ig_id": "IG1", "page_token": "PT"}), arquivo, "T", "L")
+        self.assertEqual(r.id_externo, "M9")
+        criar_chamada = [c for c in rede.chamadas if c[1].endswith("/IG1/media")][0]
+        self.assertTrue(criar_chamada[2]["data"]["video_url"].startswith("https://exemplo:8443/videos/"))
+        self.assertNotIn("upload_type", criar_chamada[2]["data"])
+        self.assertFalse(any("rupload" in c[1] for c in rede.chamadas))
+        self.assertTrue(visto["existia"])
+        self.assertEqual(list(pasta.glob("*.mp4")), [])          # depois de publicar, o link some
+
     def test_reel_do_facebook_e_token_invalido(self):
         from app.postagem.redes import ErroPostagem
         arquivo = arquivo_de(1000)

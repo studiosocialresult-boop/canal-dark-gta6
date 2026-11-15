@@ -60,6 +60,11 @@ PRECOS_USD_POR_MILHAO = {
 
 # Postagem (Fase 5).
 URL_PAINEL = os.getenv("CANAL_URL_PAINEL", "http://127.0.0.1:8000")   # base dos enderecos de retorno do login
+# Endereco publico (Tailscale Funnel) da pasta PASTA_VIDEOS_PUBLICOS. Com ele, o Instagram baixa o video por
+# link em vez de receber o arquivo empurrado (o envio empurrado esbarra num limite de ~33 s da Meta).
+# Vazio = continua o envio empurrado. So existe na VPS (~/canal-dark-vps.env).
+URL_VIDEOS_PUBLICOS = os.getenv("CANAL_URL_VIDEOS_PUBLICOS", "").rstrip("/")
+PASTA_VIDEOS_PUBLICOS = PASTA_DADOS / "publico"
 FUSO = os.getenv("CANAL_FUSO", "America/Sao_Paulo")                 # horarios da agenda sao mostrados neste fuso
 VERSAO_META = "v27.0"                                                # versao da API da Meta (Instagram e Facebook)
 
