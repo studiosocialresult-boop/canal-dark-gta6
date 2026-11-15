@@ -28,8 +28,8 @@ CREATE TABLE IF NOT EXISTS templates (
 FILA_SQL = """
 -- Fila de trabalho do painel: um item por vez e processado, na ordem de chegada.
 -- tipo: "link" (processar um video), "narrar" (narrar um corte; alvo = id do corte),
--- "lote" (gerar os videos de um template; alvo = id do template) ou "baixar" (baixar um video
--- para a biblioteca; alvo = link). O codigo valida o tipo.
+-- "lote" (gerar os videos de um template; alvo = id do template), "baixar" (baixar um video
+-- para a biblioteca; alvo = link) ou "preparar" (frase + video no template; alvo = "corte_id:template_id"). O codigo valida o tipo.
 -- estado: aguardando -> processando -> pronto (ou falhou)
 CREATE TABLE IF NOT EXISTS fila (
     id INTEGER PRIMARY KEY,

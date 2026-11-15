@@ -51,6 +51,8 @@ def executar(item) -> str:
         return biblioteca.baixar_para_biblioteca(item["alvo"], item["usuario_id"])
     if item["tipo"] == "lote":
         return lote.processar_template(int(item["alvo"]), progresso=avisar)
+    if item["tipo"] == "preparar":
+        return lote.preparar_corte(item["alvo"], item["usuario_id"], progresso=avisar)
     raise ValueError(f"Tipo de item desconhecido: {item['tipo']}")
 
 

@@ -106,6 +106,17 @@ def gerar_para_video(titulo: str, motivo: str | None, quantidade: int, *, usuari
     return [f.strip() for f in dados["frases"]]
 
 
+def frase_do_corte(corte, *, usuario_id: int, cliente=None) -> tuple[str, bool]:
+    """A frase do gancho de um corte: a guardada ou, na primeira vez, uma nova escrita pela IA (e guardada).
+
+    Devolve (frase, nova)."""
+    if corte["frase_gancho"]:
+        return corte["frase_gancho"], False
+    frase = gerar_para_video(corte["titulo"], corte["motivo"], 1, usuario_id=usuario_id, cliente=cliente)[0]
+    banco.atualizar_corte(corte["id"], frase_gancho=frase)
+    return frase, True
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 3 or not sys.argv[2].isdigit():
         print('Uso: python -m app.multiplicador.frases "ideia base" quantidade')

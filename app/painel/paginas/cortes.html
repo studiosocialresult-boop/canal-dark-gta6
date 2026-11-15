@@ -25,6 +25,7 @@
   <div class="abas" id="abas" role="tablist">
     <button class="aba ativa" data-aba="revisar" role="tab">Para revisar <span class="n" id="aba-revisar">0</span></button>
     <button class="aba" data-aba="aprovado" role="tab">Aprovados <span class="n" id="aba-aprovado">0</span></button>
+    <button class="aba" data-aba="prontos" role="tab">Prontos para agendar <span class="n" id="aba-prontos">0</span></button>
     <button class="aba" data-aba="descartado" role="tab">Descartados <span class="n" id="aba-descartado">0</span></button>
     <button class="aba" data-aba="todos" role="tab">Todos <span class="n" id="aba-todos">0</span></button>
   </div>
@@ -45,6 +46,7 @@
   <b id="massa-texto">0 selecionados</b>
   <button class="botao ok pequeno" id="massa-aprovar"><svg class="i"><use href="#i-check"/></svg>Aprovar</button>
   <button class="botao perigo pequeno" id="massa-descartar" style="background:transparent;color:#ff8a8e"><svg class="i"><use href="#i-x"/></svg>Descartar</button>
+  <button class="botao pequeno" id="massa-preparar" title="Escolher um template e gerar frase e vídeo para cada corte"><svg class="i"><use href="#i-check"/></svg>Preparar com template</button>
   <button class="botao pequeno" id="massa-agendar" style="background:var(--acento);color:#fff;border-color:transparent"><svg class="i"><use href="#i-calendario"/></svg>Agendar</button>
   <button class="botao fantasma pequeno" id="massa-limpar">Limpar</button>
 </div>
@@ -53,7 +55,15 @@
 <div class="fundo-modal" id="modal-corte">
   <div class="modal" style="position:relative">
     <button class="botao-icone fechar" id="corte-fechar" aria-label="Fechar"><svg class="i"><use href="#i-x"/></svg></button>
-    <div class="modal-video"><video id="player" controls playsinline preload="metadata"></video></div>
+    <div class="modal-video"><div class="video-caixa">
+      <video id="player" controls playsinline preload="metadata"></video>
+      <img id="player-previa" class="previa-grande" alt="Prévia do corte no template" hidden>
+      <div class="video-modos" id="video-modos" hidden>
+        <button type="button" data-modo-video="template" class="ativo">Com template</button>
+        <button type="button" data-modo-video="original">Original</button>
+      </div>
+      <span class="video-aviso" id="player-aviso" hidden></span>
+    </div></div>
     <div class="modal-corpo">
       <div class="modal-navegacao">
         <span id="corte-posicao"></span>

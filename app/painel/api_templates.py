@@ -474,6 +474,26 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
         return FileResponse(arquivo, media_type="video/mp4", filename=nome if baixar else None,
                             headers={"Cache-Control": "no-cache"})
 
+    @app.get("/api/templates/{template_id}/saidas/{saida_id}/miniatura.jpg")
+    def api_miniatura_saida(template_id: int, saida_id: int):
+        """Um quadro do video pronto, para o cartao do corte (gerado uma vez e guardado)."""
+        _template_do_dono(template_id)
+        saida = repositorio.ler_saida(saida_id)
+        if saida is None or saida["template_id"] != template_id or saida["estado"] != "pronto" or not saida["arquivo"]:
+            raise HTTPException(404)
+        arquivo = config.caminho_absoluto(saida["arquivo"])
+        imagem = repositorio.pasta_do_template(template_id) / "miniaturas" / f"saida_{saida_id}.jpg"
+        if not imagem.exists():
+            if not arquivo.exists():
+                raise HTTPException(404)
+            imagem.parent.mkdir(parents=True, exist_ok=True)
+            resultado = subprocess.run(
+                ["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", "1.5", "-i", str(arquivo),
+                 "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "4", str(imagem)], capture_output=True)
+            if resultado.returncode != 0 or not imagem.exists():
+                raise HTTPException(404, "Não consegui gerar a miniatura.")
+        return FileResponse(imagem, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
+
     @app.get("/api/templates/{template_id}/saidas.zip")
     def api_zip(template_id: int):
         template = _template_do_dono(template_id)
@@ -532,16 +552,32 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
     def api_frase_auto(corte_id: int):
         """A frase do gancho ja pronta: devolve a guardada ou, na primeira vez, a IA escreve uma e guarda."""
         corte = _corte_do_dono(corte_id)
-        if corte["frase_gancho"]:
-            return {"frase": corte["frase_gancho"], "nova": False}
         try:
-            frases = modulo_frases.gerar_para_video(corte["titulo"], corte["motivo"], 1, usuario_id=USUARIO)
+            frase, nova = modulo_frases.frase_do_corte(corte, usuario_id=USUARIO)
         except (TypeError, ValueError) as erro:
             raise HTTPException(400, str(erro))
         except ia.ErroIA as erro:
             raise HTTPException(502, str(erro))
-        banco.atualizar_corte(corte_id, frase_gancho=frases[0])
-        return {"frase": frases[0], "nova": True}
+        return {"frase": frase, "nova": nova}
+
+    @app.post("/api/cortes/preparar")
+    def api_preparar_cortes(dados: dict = Body(...)):
+        """Varios cortes de uma vez: cada um ganha a frase do gancho e o video no template (pela fila)."""
+        t = _template_para_corte(int(dados.get("template_id") or 0))
+        ids = [int(i) for i in dados.get("cortes") or []]
+        if not ids:
+            raise HTTPException(400, "Escolha pelo menos um corte.")
+        enfileirados = pulados = 0
+        for corte_id in dict.fromkeys(ids):
+            corte = _corte_do_dono(corte_id)
+            alvo = f"{corte_id}:{t['id']}"
+            if (not corte["caminho_arquivo"] or corte["estado"] in ("falhou", "descartado")
+                    or banco.item_na_fila(USUARIO, "preparar", alvo)):
+                pulados += 1
+                continue
+            banco.enfileirar(USUARIO, "preparar", alvo, f"Preparar ({t['nome']}): {corte['titulo'][:50]}")
+            enfileirados += 1
+        return {"ok": True, "enfileirados": enfileirados, "pulados": pulados}
 
     @app.get("/api/cortes/{corte_id}/modelo/previa.jpg")
     def api_previa_do_corte(corte_id: int, template_id: int, frase: str = ""):

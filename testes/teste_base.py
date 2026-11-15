@@ -1084,6 +1084,38 @@ class TesteTemplates(unittest.TestCase):
         banco.atualizar_corte(corte, estado="aprovado", caminho_arquivo=config.caminho_relativo(arquivo))
         return corte
 
+    def test_preparar_varios_cortes_deixa_prontos_para_agendar(self):
+        from app.painel import fila as modulo_fila
+        um, dois = self._corte_com_video("Primeiro corte"), self._corte_com_video("Segundo corte")
+        banco.atualizar_corte(dois, frase_gancho="Frase que ja existia")
+        template_id = self.novo("post")
+        r = self.cliente.post("/api/cortes/preparar", json={"cortes": [um, dois, um], "template_id": template_id})
+        self.assertEqual((r.json()["enfileirados"], r.json()["pulados"]), (2, 0), r.text)
+        # pedir de novo enquanto esta na fila nao duplica
+        self.assertEqual(self.cliente.post("/api/cortes/preparar", json={"cortes": [um], "template_id": template_id}).json()["pulados"], 1)
+        itens = [banco.item_na_fila(1, "preparar", f"{c}:{template_id}") for c in (um, dois)]
+        cortes = {c["id"]: c for c in self.cliente.get("/api/cortes").json()["cortes"]}
+        self.assertTrue(cortes[um]["preparando"])
+        self.assertIsNone(cortes[um]["pronta"])
+        with mock.patch.object(self.frases, "gerar_para_video", return_value=["Frase nova do gancho"]) as gera:
+            for item in itens:
+                self.assertEqual(modulo_fila.executar(item), "Pronto para agendar")
+                banco.atualizar_fila(item["id"], estado="pronto")
+            self.assertEqual(gera.call_count, 1)                                  # so o corte sem frase chamou a IA
+        cortes = {c["id"]: c for c in self.cliente.get("/api/cortes").json()["cortes"]}
+        for corte_id, frase in ((um, "Frase nova do gancho"), (dois, "Frase que ja existia")):
+            c = cortes[corte_id]
+            self.assertFalse(c["preparando"])
+            self.assertEqual((c["pronta"]["template_id"], c["pronta"]["frase"]), (template_id, frase))
+            self.assertFalse(c["agendado"])
+            self.assertEqual(self.cliente.get(c["pronta"]["url"]).status_code, 200)
+            mini = self.cliente.get(c["pronta"]["miniatura"])
+            self.assertEqual((mini.status_code, mini.headers["content-type"]), (200, "image/jpeg"))
+        self.assertEqual(banco.ler_corte(um)["frase_gancho"], "Frase nova do gancho")   # guardada para a proxima vez
+        # pedidos ruins
+        self.assertEqual(self.cliente.post("/api/cortes/preparar", json={"cortes": [], "template_id": template_id}).status_code, 400)
+        self.assertEqual(self.cliente.post("/api/cortes/preparar", json={"cortes": [um], "template_id": 999999}).status_code, 404)
+
     def test_corte_gera_video_no_template_sem_bagunçar_o_assistente(self):
         corte = self._corte_com_video()
         template_id = self.novo("viral")

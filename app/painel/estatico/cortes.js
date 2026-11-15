@@ -28,9 +28,13 @@
     }
   }
 
+  /** Pronto para agendar: tem o vídeo no template e ainda não foi agendado. */
+  const prontoParaAgendar = (c) => !!c.pronta && !c.agendado && !["descartado", "falhou"].includes(c.estado);
+
   const ABAS = {
-    revisar: (c) => c.estado === "renderizado" || c.estado === "proposto",
-    aprovado: (c) => c.estado === "aprovado",
+    revisar: (c) => (c.estado === "renderizado" || c.estado === "proposto") && !prontoParaAgendar(c),
+    aprovado: (c) => c.estado === "aprovado" && !prontoParaAgendar(c),
+    prontos: prontoParaAgendar,
     descartado: (c) => c.estado === "descartado",
     todos: () => true,
   };
@@ -59,6 +63,10 @@
       : c.estado === "falhou" ? '<span class="tag estado-falhou">Falhou</span>' : "";
     const voz = c.narracao === "narrado" ? '<span class="tag voz">Com voz</span>'
       : c.modo === "narrado" ? '<span class="tag">Sem voz</span>' : '<span class="tag">Original</span>';
+    const situacao = c.preparando ? '<span class="tag">Preparando…</span>'
+      : prontoParaAgendar(c) ? '<span class="tag estado-pronto">Pronto para agendar</span>'
+      : c.agendado ? '<span class="tag">Agendado</span>' : "";
+    const imagem = c.pronta ? c.pronta.miniatura : c.miniatura;
     const marcado = estado.selecionados.has(c.id);
     const acoes = c.estado === "renderizado"
       ? `<button class="mini ok" data-acao="aprovado" title="Aprovar (A)">${icone("check")}</button>
@@ -66,10 +74,10 @@
       : `<button class="mini" data-acao="renderizado" title="Voltar para revisar">${icone("refazer")}</button>`;
     return `<article class="corte ${c.estado} ${marcado ? "selecionado" : ""}" data-id="${c.id}" style="animation-delay:${Math.min(indice, 12) * 30}ms">
       <div class="corte-imagem">
-        ${c.miniatura ? `<img src="${c.miniatura}" alt="" loading="lazy">` : ""}
+        ${imagem ? `<img src="${imagem}" alt="" loading="lazy">` : ""}
         <div class="corte-topo">
           <div class="nota" style="--p:${c.nota};--cor:${corDaNota(c.nota)}" title="Nota ${c.nota}"><span>${c.nota}</span></div>
-          <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start">${voz}${selo}</div>
+          <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start">${voz}${selo}${situacao}</div>
           <div class="espaco caixa-selecao" data-selecionar>${icone("check")}</div>
         </div>
         <div class="corte-titulo">${esc(c.titulo)}</div>
@@ -88,7 +96,8 @@
     const custos = estado.cortes.filter((c) => c.custo_usd > 0).map((c) => c.custo_usd);
     $("#n-custo").textContent = custos.length ? dolar(custos.reduce((a, b) => a + b, 0) / custos.length) : "–";
     $("#aba-revisar").textContent = n.revisar;
-    $("#aba-aprovado").textContent = n.aprovados;
+    $("#aba-aprovado").textContent = estado.cortes.filter(ABAS.aprovado).length;
+    $("#aba-prontos").textContent = estado.cortes.filter(ABAS.prontos).length;
     $("#aba-descartado").textContent = n.descartados;
     $("#aba-todos").textContent = estado.cortes.length;
 
@@ -99,7 +108,8 @@
         <p>Cole o link de um vídeo do YouTube e a IA escolhe os melhores momentos, monta os cortes verticais e coloca legenda em português.</p>
         <button class="botao primario" onclick="Painel.abrirNovo()">${icone("mais")}Criar meu primeiro corte</button></div>`;
     } else if (!lista.length) {
-      const porAba = { revisar: "Nada esperando revisão. Bom trabalho!", aprovado: "Você ainda não aprovou nenhum corte.",
+      const porAba = { revisar: "Nada esperando revisão. Bom trabalho!", aprovado: "Nenhum corte aprovado esperando template.",
+                       prontos: "Nenhum corte pronto para agendar. Selecione cortes e clique em “Preparar com template”.",
                        descartado: "Nenhum corte descartado.", todos: "Nenhum corte combina com os filtros." };
       grade.innerHTML = `<div class="cartao vazio" style="grid-column:1/-1"><h2>${porAba[estado.aba]}</h2>
         <p>${estado.busca || estado.modos.size ? "Tente limpar a busca ou os filtros." : "Quando novos cortes ficarem prontos, eles aparecem aqui."}</p></div>`;
@@ -164,7 +174,7 @@
     if (!c || !c.midia) return;
     alvo.dataset.previa = "1";
     const video = document.createElement("video");
-    Object.assign(video, { src: c.midia, muted: true, loop: true, playsInline: true, preload: "auto" });
+    Object.assign(video, { src: c.pronta ? c.pronta.url : c.midia, muted: true, loop: true, playsInline: true, preload: "auto" });
     video.addEventListener("loadeddata", () => video.classList.add("tocando"), { once: true });
     alvo.querySelector(".corte-imagem").insertBefore(video, alvo.querySelector(".corte-topo"));
     if (alvo.matches(":hover")) video.play().catch(() => {});
@@ -218,6 +228,7 @@
   function fechar() {
     modal.classList.remove("aberto");
     player.pause(); player.removeAttribute("src"); player.load();
+    player.hidden = false; previaGrande.hidden = true; previaGrande.removeAttribute("src"); delete previaGrande.dataset.src;
     estado.aberto = null;
   }
 
@@ -227,10 +238,7 @@
     const c = estado.cortes.find((x) => x.id === estado.aberto);
     if (!c) { fechar(); return; }
 
-    if (novoVideo || !player.src.endsWith(c.midia || "")) {
-      player.src = c.midia || "";
-      player.play().catch(() => {});
-    }
+    if (novoVideo) { player.pause(); player.removeAttribute("src"); }
     $("#corte-posicao").textContent = indice >= 0 ? `${indice + 1} de ${lista.length}` : "";
     const estadoSelo = { renderizado: '<span class="selo acento">Para revisar</span>', aprovado: '<span class="selo ok">Aprovado</span>',
                          descartado: '<span class="selo erro">Descartado</span>', falhou: '<span class="selo erro">Falhou</span>' }[c.estado] || "";
@@ -314,6 +322,7 @@
         nova.onerror = () => { img.style.opacity = .25; };
         nova.src = urlPrevia(img.dataset.previaTemplate);
       });
+      atualizarVisualizacao();
     }, esperar);
   }
 
@@ -366,18 +375,76 @@
         <span class="dica">Clique no template que você gostou e gere o vídeo. A frase foi escrita pela IA (uma fração de centavo); você pode editar.</span>
       </div>
       ${itens ? `<div style="margin-top:10px">${itens}</div>` : ""}`;
+    atualizarVisualizacao();
   }
+
+  // ---------- o vídeo grande: com o template escolhido ou o original ----------
+
+  const previaGrande = $("#player-previa"), avisoVideo = $("#player-aviso");
+  const visual = { modo: "template" };
+  try { if (localStorage.getItem("canal_modo_video") === "original") visual.modo = "original"; } catch (e) { /* ok */ }
+
+  const normal = (texto) => String(texto || "").trim().split(/\s+/).join(" ");
+
+  /** O vídeo pronto deste corte no template escolhido (de preferência com a frase atual). */
+  function saidaEscolhida() {
+    const prontas = modelo.saidas.filter((s) => s.estado === "pronto" && s.template_id === modelo.templateId);
+    return prontas.find((s) => normal(s.frase) === normal(modelo.frase)) || prontas[0] || null;
+  }
+
+  function atualizarVisualizacao() {
+    const c = estado.cortes.find((x) => x.id === estado.aberto);
+    if (!c) return;
+    const comTemplate = !!(c.midia && modelo.templates && modelo.templates.length && modelo.templateId
+                           && !["falhou", "descartado"].includes(c.estado) && modelo.corteId === c.id);
+    $("#video-modos").hidden = !comTemplate;
+    document.querySelectorAll("[data-modo-video]").forEach((b) => b.classList.toggle("ativo", b.dataset.modoVideo === visual.modo));
+    let fonte = c.midia || "", imagem = null;
+    if (comTemplate && visual.modo === "template") {
+      const s = saidaEscolhida();
+      if (s) fonte = s.url;
+      else if (!modelo.carregandoFrase) imagem = urlPrevia(modelo.templateId);
+    }
+    if (imagem) {
+      player.pause(); player.hidden = true; previaGrande.hidden = false;
+      if (previaGrande.dataset.src !== imagem) {
+        previaGrande.dataset.src = imagem;
+        previaGrande.style.opacity = .6;
+        previaGrande.onload = () => { previaGrande.style.opacity = 1; };
+        previaGrande.src = imagem;
+      }
+      const naFila = modelo.saidas.some((s) => s.template_id === modelo.templateId && ["aguardando", "renderizando"].includes(s.estado));
+      avisoVideo.textContent = naFila ? "Gerando o vídeo neste template… ele aparece aqui quando ficar pronto."
+        : "Prévia do template. Clique em “Gerar vídeo” para assistir com ele.";
+      avisoVideo.hidden = false;
+    } else {
+      previaGrande.hidden = true; avisoVideo.hidden = true; player.hidden = false;
+      if (fonte && !player.src.endsWith(fonte)) { player.src = fonte; player.play().catch(() => {}); }
+    }
+  }
+
+  $("#video-modos").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-modo-video]");
+    if (!b) return;
+    visual.modo = b.dataset.modoVideo;
+    try { localStorage.setItem("canal_modo_video", visual.modo); } catch (x) { /* ok */ }
+    atualizarVisualizacao();
+  });
 
   /** Chamada pelo preencherModal a cada corte aberto. */
   function iniciarModelo(c, novoVideo) {
     if (novoVideo || modelo.corteId !== c.id) {
       clearTimeout(modelo.relogio);
-      Object.assign(modelo, { corteId: c.id, frase: "", saidas: [], gerandoFrases: false, enviando: false, carregandoFrase: !!c.midia });
-      if (c.midia) { carregarSaidasDoModelo(); carregarFraseAuto(c.id); }
+      const fraseGuardada = c.frase_gancho || (c.pronta && c.pronta.frase) || "";
+      Object.assign(modelo, { corteId: c.id, frase: fraseGuardada, saidas: [], gerandoFrases: false, enviando: false,
+                              carregandoFrase: !!c.midia && !fraseGuardada });
+      if (c.pronta && (!modelo.templates || modelo.templates.some((t) => t.id === c.pronta.template_id))) modelo.templateId = c.pronta.template_id;
+      if (c.midia) { carregarSaidasDoModelo(); if (!fraseGuardada) carregarFraseAuto(c.id); }
     }
     if (modelo.templates === null) carregarTemplatesDoModelo();
-    if (!caixaModelo.querySelector("#modelo-template") || novoVideo) desenharModelo();
+    if (!caixaModelo.querySelector("#modelo-miniaturas") || novoVideo) desenharModelo();
     else $("#corte-modelo-bloco").hidden = !(c.midia && !["falhou", "descartado"].includes(c.estado));
+    atualizarVisualizacao();
   }
 
   /** A frase do gancho já pronta: a guardada, ou a IA escreve uma na primeira vez. */
@@ -434,6 +501,7 @@
         const nome = b.querySelector("span.dica:last-child");
         if (nome) nome.textContent = nome.textContent.replace(" ✓", "") + (ativo ? " ✓" : "");
       });
+      atualizarVisualizacao();
     }
     else if (alvo.id === "modelo-sugerir") gerarFrasesDoModelo();
     else if (alvo.id === "modelo-gerar") gerarVideoDoModelo(modelo.frase, modelo.templateId);
@@ -469,12 +537,78 @@
   }
 
   $("#corte-fechar").onclick = fechar;
-  $("#corte-agendar").onclick = () => { const id = estado.aberto; fechar(); Agendar.abrir({ cortes: [id] }); };
+  $("#corte-agendar").onclick = () => {
+    const c = estado.cortes.find((x) => x.id === estado.aberto);
+    const s = saidaEscolhida();
+    const saidaId = s ? s.id : c && c.pronta ? c.pronta.saida_id : null;
+    fechar();
+    Agendar.abrir(saidaId ? { saidas: [saidaId] } : { cortes: [c.id] });
+  };
+
+  // ---------- preparar vários cortes com um template ----------
+
+  async function abrirPreparar() {
+    const escolhidos = [...estado.selecionados].map((id) => estado.cortes.find((c) => c.id === id))
+      .filter((c) => c && c.midia && !["descartado", "falhou"].includes(c.estado));
+    if (!escolhidos.length) { aviso("Nenhum dos cortes selecionados pode ser preparado.", { tipo: "erro" }); return; }
+    if (modelo.templates === null) await carregarTemplatesDoModelo();
+    if (!modelo.templates.length) { aviso("Crie um template primeiro, na tela Templates.", { tipo: "erro" }); return; }
+    const exemplo = escolhidos[0];
+    let escolhido = modelo.templates.some((t) => t.id === modelo.templateId) ? modelo.templateId : modelo.templates[0].id;
+    const fundo = document.createElement("div");
+    fundo.className = "fundo-modal aberto";
+    const n = escolhidos.length;
+    fundo.innerHTML = `<div class="modal estreito" style="position:relative;width:min(640px,100%)">
+      <div class="modal-simples" style="padding:24px;display:grid;gap:14px">
+        <h2 style="margin:0">Preparar ${n === 1 ? "1 corte" : `${n} cortes`} com template</h2>
+        <p class="dica" style="margin:0">Escolha o template. Cada corte ganha a frase do gancho escrita pela IA (uma fração de centavo cada)
+          e o vídeo pronto no template, que vai para <b>Prontos para agendar</b>. Leva cerca de 1 minuto por corte; pode continuar usando o painel.</p>
+        <div class="grade-escolha">${modelo.templates.map((t) => `<button type="button" data-t="${t.id}" class="${t.id === escolhido ? "ativo" : ""}" title="${esc(t.nome)} · ${esc(t.layout_nome)}">
+          <img loading="lazy" alt="" src="/api/cortes/${exemplo.id}/modelo/previa.jpg?template_id=${t.id}&frase=${encodeURIComponent(exemplo.frase_gancho || "")}">
+          <span class="dica" style="display:block;margin-top:4px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.nome)} · ${esc(t.layout_nome)}</span></button>`).join("")}</div>
+        <div class="modal-acoes"><button class="botao" data-cancelar>Cancelar</button>
+          <button class="botao primario" data-confirmar>${icone("check")}Preparar ${n === 1 ? "1 corte" : `${n} cortes`}</button></div>
+      </div></div>`;
+    document.body.appendChild(fundo);
+    const fechar = () => fundo.remove();
+    fundo.addEventListener("mousedown", (e) => { if (e.target === fundo) fechar(); });
+    fundo.addEventListener("click", async (e) => {
+      const t = e.target.closest("[data-t]");
+      if (t) {
+        escolhido = Number(t.dataset.t);
+        fundo.querySelectorAll("[data-t]").forEach((b) => b.classList.toggle("ativo", b === t));
+        return;
+      }
+      if (e.target.closest("[data-cancelar]")) { fechar(); return; }
+      const confirmar = e.target.closest("[data-confirmar]");
+      if (!confirmar) return;
+      confirmar.disabled = true;
+      try {
+        // Preparar é decidir postar: o que ainda não estava aprovado passa a estar.
+        const naoAprovados = escolhidos.filter((c) => c.estado !== "aprovado").map((c) => c.id);
+        if (naoAprovados.length) await api("/api/cortes/estado", { metodo: "POST", corpo: { ids: naoAprovados, estado: "aprovado" } });
+        const r = await api("/api/cortes/preparar", { metodo: "POST", corpo: { cortes: escolhidos.map((c) => c.id), template_id: escolhido } });
+        modelo.templateId = escolhido;
+        try { localStorage.setItem("canal_modelo_template", String(escolhido)); } catch (x) { /* ok */ }
+        aviso(r.enfileirados
+          ? `${r.enfileirados} corte(s) na fila para preparar.${r.pulados ? ` ${r.pulados} já estavam na fila ou não têm vídeo.` : ""} Eles vão para “Prontos para agendar”.`
+          : "Esses cortes já estavam na fila.");
+        fechar();
+        estado.selecionados.clear();
+        await carregar();
+        if (r.enfileirados && Painel.abrirGaveta) Painel.abrirGaveta();
+      } catch (erro) { aviso(erro.message, { tipo: "erro" }); confirmar.disabled = false; }
+    });
+  }
+  $("#massa-preparar").onclick = abrirPreparar;
   $("#massa-agendar").onclick = () => {
-    const aprovados = [...estado.selecionados].filter((id) => estado.cortes.find((c) => c.id === id)?.estado === "aprovado");
-    if (!aprovados.length) { aviso("Só cortes aprovados podem ser agendados. Aprove primeiro.", { tipo: "erro" }); return; }
-    if (aprovados.length < estado.selecionados.size) aviso(`${estado.selecionados.size - aprovados.length} corte(s) não aprovado(s) ficaram de fora.`);
-    Agendar.abrir({ cortes: aprovados });
+    const escolhidos = [...estado.selecionados].map((id) => estado.cortes.find((c) => c.id === id)).filter(Boolean);
+    const saidas = escolhidos.filter((c) => c.pronta && c.estado === "aprovado").map((c) => c.pronta.saida_id);   // já no template
+    const cortes = escolhidos.filter((c) => !c.pronta && c.estado === "aprovado").map((c) => c.id);
+    if (!saidas.length && !cortes.length) { aviso("Só cortes aprovados podem ser agendados. Aprove primeiro.", { tipo: "erro" }); return; }
+    const fora = escolhidos.length - saidas.length - cortes.length;
+    if (fora) aviso(`${fora} corte(s) não aprovado(s) ficaram de fora.`);
+    Agendar.abrir({ cortes, saidas });
   };
   modal.addEventListener("mousedown", (e) => { if (e.target === modal) fechar(); });
   $("#corte-aprovar").onclick = () => decidir("aprovado");

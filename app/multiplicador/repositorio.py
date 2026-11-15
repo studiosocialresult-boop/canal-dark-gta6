@@ -289,6 +289,34 @@ def saidas_do_corte(corte_id: int, usuario_id: int) -> list[dict]:
             "WHERE m.corte_id = ? AND t.usuario_id = ? ORDER BY s.id DESC", (corte_id, usuario_id))]
 
 
+def situacao_dos_cortes(usuario_id: int) -> dict[int, dict]:
+    """Por corte: o video pronto no template mais recente, se ha video sendo preparado e se ja foi agendado."""
+    situacao: dict[int, dict] = {}
+
+    def de(corte_id: int) -> dict:
+        return situacao.setdefault(corte_id, {"pronta": None, "preparando": False, "agendado": False})
+
+    with closing(banco.conectar()) as conexao:
+        for l in conexao.execute(
+                "SELECT m.corte_id, s.id, s.estado, s.template_id, t.nome AS template, f.texto AS frase "
+                "FROM template_saidas s JOIN template_midias m ON m.id = s.midia_id "
+                "JOIN template_frases f ON f.id = s.frase_id JOIN templates t ON t.id = s.template_id "
+                "WHERE t.usuario_id = ? AND m.corte_id IS NOT NULL AND m.zona = 1 ORDER BY s.id DESC", (usuario_id,)):
+            info = de(l["corte_id"])
+            if l["estado"] == "pronto" and info["pronta"] is None:
+                info["pronta"] = {"saida_id": l["id"], "template_id": l["template_id"], "template": l["template"],
+                                  "frase": l["frase"]}
+            elif l["estado"] in ("aguardando", "renderizando"):
+                info["preparando"] = True
+        for l in conexao.execute("SELECT DISTINCT corte_id FROM publicacoes WHERE usuario_id = ? "
+                                 "AND corte_id IS NOT NULL AND estado != 'cancelada'", (usuario_id,)):
+            de(l["corte_id"])["agendado"] = True
+        for l in conexao.execute("SELECT alvo FROM fila WHERE usuario_id = ? AND tipo = 'preparar' "
+                                 "AND estado IN ('aguardando', 'processando')", (usuario_id,)):
+            de(int(l["alvo"].split(":")[0]))["preparando"] = True
+    return situacao
+
+
 # ---------- videos gerados ----------
 
 def combinacoes(template_id: int) -> tuple[list[dict], list[dict]]:

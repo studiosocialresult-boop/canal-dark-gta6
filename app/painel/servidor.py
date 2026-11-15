@@ -22,6 +22,7 @@ from app.download import baixar
 from app.busca import diaria
 from app.desempenho import coletor
 from app.desempenho import repositorio as repositorio_desempenho
+from app.multiplicador import repositorio as repositorio_templates
 from app.painel import api_busca, api_chaves, api_desempenho, api_perfis, api_postagem, api_templates, fila
 from app.postagem import agendador
 
@@ -161,7 +162,9 @@ def criar_app() -> FastAPI:
     @app.get("/api/cortes")
     def api_cortes():
         visualizacoes = repositorio_desempenho.visualizacoes_por_corte(USUARIO)      # uma consulta so
-        return {"cortes": [_corte_json(l, visualizacoes.get(l["id"])) for l in banco.listar_cortes(USUARIO)
+        situacao = repositorio_templates.situacao_dos_cortes(USUARIO)
+        return {"cortes": [_corte_json(l, visualizacoes.get(l["id"]), situacao.get(l["id"]))
+                           for l in banco.listar_cortes(USUARIO)
                            if l["estado"] in ESTADOS_REVISAVEIS],
                 "numeros": _numeros()}
 
@@ -298,9 +301,16 @@ def _corte_do_dono(corte_id: int):
     return corte
 
 
-def _corte_json(l, visualizacoes: int | None = None) -> dict:
+def _corte_json(l, visualizacoes: int | None = None, situacao: dict | None = None) -> dict:
     arquivo = l["caminho_arquivo"]
+    situacao = situacao or {"pronta": None, "preparando": False, "agendado": False}
+    pronta = situacao["pronta"]
+    if pronta:
+        base = f"/api/templates/{pronta['template_id']}/saidas/{pronta['saida_id']}"
+        pronta = {**pronta, "url": f"{base}.mp4", "miniatura": f"{base}/miniatura.jpg"}
     return {
+        "pronta": pronta, "preparando": situacao["preparando"], "agendado": situacao["agendado"],
+        "frase_gancho": l["frase_gancho"],
         "id": l["id"], "video_id": l["video_id"], "titulo": l["titulo"], "nota": l["nota"],
         "modo": l["modo"], "estado": l["estado"], "motivo": l["motivo"], "erro": l["erro"],
         "duracao_s": round(l["fim_s"] - l["inicio_s"], 1),
