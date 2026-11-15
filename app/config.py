@@ -76,13 +76,18 @@ CONFIG_PADRAO = {
     "duracao_max_s": 75,
     "nota_minima_narracao": 70,
     # Postagem
-    # Ritmo inicial de cada conta nova, por rede (posts por dia). Somados dao ~13 posts/dia, dentro da
-    # meta de 10 a 20, sem saturar nenhuma conta (acima de ~6 por dia na mesma conta os videos disputam publico).
+    # Meta de posts por dia de uma conta ja estabelecida, por rede (pesquisa de 15/11/2026, em
+    # reports/). Somadas dao 13 posts/dia. Conta nova comeca abaixo e sobe sozinha (REDES[...]["rampa"]).
     "posts_dia_youtube": 4,
     "posts_dia_instagram": 3,
     "posts_dia_facebook": 3,
     "posts_dia_tiktok": 3,
-    "intervalo_minimo_min": 120,   # minutos minimos entre dois posts da mesma conta
+    # Minutos minimos entre dois posts da mesma conta. Posts colados disputam o mesmo publico; no YouTube,
+    # mais de 3 videos em pouco tempo ainda pausam os avisos aos inscritos por 24 h.
+    "intervalo_youtube_min": 210,
+    "intervalo_instagram_min": 150,
+    "intervalo_facebook_min": 150,
+    "intervalo_tiktok_min": 180,
     "janela_inicio": 11,           # primeira hora do dia em que posta (fuso local): pega o almoco...
     "janela_fim": 23,              # ...o fim de tarde e o pico da noite (ultima hora, exclusiva)
     "modo_automatico": 0,          # 1: aprova e agenda sozinho os cortes com nota alta (desligado por padrao)

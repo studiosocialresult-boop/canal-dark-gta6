@@ -230,6 +230,7 @@ CREATE TABLE IF NOT EXISTS contas (
     credenciais TEXT NOT NULL,
     ativa INTEGER NOT NULL DEFAULT 1,
     posts_por_dia INTEGER NOT NULL DEFAULT 4,
+    rampa INTEGER NOT NULL DEFAULT 1,       -- 1: conta nova, comeca com poucos posts e sobe ate posts_por_dia
     estado TEXT NOT NULL DEFAULT 'conectada',
     erro TEXT,
     criado_em TEXT NOT NULL DEFAULT (datetime('now')),
@@ -388,6 +389,9 @@ def _garantir_colunas(conexao) -> None:
     colunas = {l["name"] for l in conexao.execute("PRAGMA table_info(publicacoes)")}
     if colunas and "removida_em" not in colunas:
         conexao.execute("ALTER TABLE publicacoes ADD COLUMN removida_em TEXT")
+    colunas = {l["name"] for l in conexao.execute("PRAGMA table_info(contas)")}
+    if colunas and "rampa" not in colunas:
+        conexao.execute("ALTER TABLE contas ADD COLUMN rampa INTEGER NOT NULL DEFAULT 1")
 
 
 TRAVAS_ANTIGAS = {"fila": "CHECK (tipo", "templates": "CHECK (layout"}

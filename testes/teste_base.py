@@ -2060,18 +2060,65 @@ class TesteAgendador(unittest.TestCase):
         self.assertEqual(depois[0], primeiros[1])
 
     def test_intervalo_minimo_entre_posts_da_mesma_conta(self):
-        # 8 por dia das 11h as 23h daria um post a cada 90 min; o intervalo minimo (120 min) segura
-        self.contas.atualizar_conta(self.yt, posts_por_dia=8)
+        # 8 por dia das 11h as 23h daria um post a cada 90 min; o intervalo do YouTube (210 min) segura
+        self.contas.atualizar_conta(self.yt, posts_por_dia=8, rampa=0)
         horarios = sorted(self.ag.proximos_horarios(self.contas.ler_conta(self.yt), 10, 1))
         self.assertEqual(len(horarios), 10)
-        self.assertTrue(all((b - a).total_seconds() >= 120 * 60 for a, b in zip(horarios, horarios[1:])))
+        self.assertTrue(all((b - a).total_seconds() >= 210 * 60 for a, b in zip(horarios, horarios[1:])))
         locais = [h.astimezone(self.ag._fuso()) for h in horarios]
         self.assertTrue(all(11 <= h.hour < 23 for h in locais))
+
+    def test_meta_do_youtube_cabe_no_dia_com_intervalo_maior_que_o_passo(self):
+        # 4 por dia em 12 h daria um a cada 3 h, menos que as 3h30 do YouTube: os 4 ficam a 3h30, todos no mesmo dia
+        from datetime import date
+        locais = [h.astimezone(self.ag._fuso()) for h in self.ag.horarios_do_dia(date(2026, 11, 20), 4, 11, 23, 210)]
+        self.assertEqual(len(locais), 4)
+        self.assertTrue(all((b - a).total_seconds() == 210 * 60 for a, b in zip(locais, locais[1:])))
+        self.assertTrue(all(11 <= h.hour < 23 and h.minute % 5 == 0 for h in locais))
+        # o que nao cabe na janela fica para o dia seguinte (nao aperta o intervalo)
+        self.assertEqual(len(self.ag.horarios_do_dia(date(2026, 11, 20), 8, 11, 23, 210)), 4)
 
     def test_ritmo_padrao_por_rede(self):
         self.assertEqual([banco.ler_config(1, f"posts_dia_{r}") for r in ("youtube", "instagram", "facebook", "tiktok")],
                          [4, 3, 3, 3])
-        self.assertEqual(banco.ler_config(1, "intervalo_minimo_min"), 120)
+        self.assertEqual([banco.ler_config(1, f"intervalo_{r}_min") for r in ("youtube", "instagram", "facebook", "tiktok")],
+                         [210, 150, 150, 180])
+
+    def test_conta_nova_sobe_aos_poucos_ate_a_meta(self):
+        from datetime import timedelta
+        yt = self.contas.ler_conta(self.yt)
+        ig = self.contas.ler_conta(self.contas.salvar_conta(1, "instagram", "IG1", "Insta", None, {"t": "x"}, 3))
+        inicio = self.ag._inicio_da_conta(yt)
+        dias = [0, 13, 14, 27, 28, 200]
+        self.assertEqual([self.ag.ritmo_no_dia(yt, inicio + timedelta(days=d)) for d in dias], [2, 2, 3, 3, 4, 4])
+        self.assertEqual([self.ag.ritmo_no_dia(ig, inicio + timedelta(days=d)) for d in dias], [1, 1, 2, 2, 3, 3])
+        resumo = self.ag.resumo_ritmo(yt, inicio)
+        self.assertEqual((resumo["ritmo_hoje"], resumo["subindo"], resumo["proximo_ritmo"]), (2, True, 3))
+        self.assertEqual(resumo["muda_em"], (inicio + timedelta(days=14)).isoformat())
+        # meta abaixo do degrau: nunca passa da meta
+        self.contas.atualizar_conta(self.yt, posts_por_dia=1)
+        self.assertEqual(self.ag.ritmo_no_dia(self.contas.ler_conta(self.yt), inicio), 1)
+        # conta ja estabelecida (rampa desligada): meta desde o primeiro dia
+        self.contas.atualizar_conta(self.yt, posts_por_dia=4, rampa=0)
+        conta = self.contas.ler_conta(self.yt)
+        self.assertEqual(self.ag.ritmo_no_dia(conta, inicio), 4)
+        self.assertFalse(self.ag.resumo_ritmo(conta, inicio)["subindo"])
+
+    def test_agenda_de_conta_nova_respeita_a_rampa(self):
+        horarios = self.ag.proximos_horarios(self.contas.ler_conta(self.yt), 12, 1)
+        por_dia = {}
+        for h in horarios:
+            dia = h.astimezone(self.ag._fuso()).date()
+            por_dia[dia] = por_dia.get(dia, 0) + 1
+        self.assertTrue(all(n <= 2 for n in por_dia.values()))          # semanas 1 e 2 do YouTube: 2 por dia
+
+    def test_freio_de_seguranca_e_o_dobro_da_meta(self):
+        conta = self.contas.ler_conta(self.yt)
+        self.assertEqual(self.ag.limite_seguro(conta), 8)
+        self.contas.atualizar_conta(self.yt, posts_por_dia=24)
+        self.assertEqual(self.ag.limite_seguro(self.contas.ler_conta(self.yt)), 48)
+        tiktok = self.contas.ler_conta(self.contas.salvar_conta(1, "tiktok", "TT1", "TT", None, {"t": "x"}, 12))
+        self.assertEqual(self.ag.limite_seguro(tiktok), 15)              # nunca acima do teto tecnico da rede
 
     def test_so_corte_aprovado_e_agendado(self):
         nao_aprovado = self.novo_corte("renderizado")
@@ -2261,6 +2308,11 @@ class TestePainelPostagem(unittest.TestCase):
         dados = self.contas.ler_conta(conta)
         self.assertEqual((dados["posts_por_dia"], dados["ativa"]), (8, 0))
         self.assertEqual(self.cliente.put(f"/api/contas/{conta}", json={"posts_por_dia": 99}).status_code, 400)
+        lida = next(c for c in self.cliente.get("/api/contas").json()["contas"] if c["id"] == conta)
+        self.assertEqual((lida["rampa"], lida["ritmo_hoje"], lida["subindo"], lida["limite_seguro"]), (1, 2, True, 16))
+        self.assertEqual(self.cliente.put(f"/api/contas/{conta}", json={"rampa": False}).status_code, 200)
+        lida = next(c for c in self.cliente.get("/api/contas").json()["contas"] if c["id"] == conta)
+        self.assertEqual((lida["rampa"], lida["ritmo_hoje"], lida["subindo"]), (0, 8, False))
         self.assertEqual(self.cliente.delete(f"/api/contas/{conta}").status_code, 200)
         self.assertEqual(self.cliente.put("/api/contas/99999", json={"ativa": True}).status_code, 404)
 

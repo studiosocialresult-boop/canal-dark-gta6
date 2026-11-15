@@ -18,6 +18,17 @@
     if (p.get("erro") || p.get("conectadas")) history.replaceState(null, "", "/contas");
   }
 
+  function dataCurta(iso) {
+    const [, mes, dia] = iso.split("-");
+    return `${dia}/${mes}`;
+  }
+
+  function ritmoTexto(c) {
+    const hoje = `Hoje: ${c.ritmo_hoje} ${c.ritmo_hoje === 1 ? "post" : "posts"}`;
+    if (c.subindo) return `${hoje} (conta nova: sobe para ${c.proximo_ritmo} em ${dataCurta(c.muda_em)}, até chegar a ${c.posts_por_dia})`;
+    return `${hoje} · freio de segurança: no máximo ${c.limite_seguro} em 24 h`;
+  }
+
   function desenhar(dados) {
     $("#servicos").innerHTML = Object.entries(SERVICOS).map(([id, s]) => {
       const info = dados.servicos[id];
@@ -39,9 +50,11 @@
       <div class="linha-conta" data-id="${c.id}">
         <div class="foto-conta">${c.foto ? `<img src="${esc(c.foto)}" alt="" referrerpolicy="no-referrer">` : esc((c.nome || "?").replace("@", "")[0].toUpperCase())}</div>
         <div style="min-width:0;flex:1"><b>${esc(c.nome)}</b> <span class="rede ${c.rede}">${NOMES_REDE[c.rede]}</span>
-          ${c.estado !== "conectada" ? `<br><small style="color:var(--erro)">${esc(c.erro || "Precisa conectar de novo.")}</small>` : ""}</div>
+          ${c.estado !== "conectada" ? `<br><small style="color:var(--erro)">${esc(c.erro || "Precisa conectar de novo.")}</small>` : ""}
+          <br><small class="dica">${ritmoTexto(c)}</small></div>
         ${c.estado !== "conectada" ? `<a class="botao pequeno" href="/contas/conectar/${c.rede === "youtube" ? "youtube" : c.rede === "tiktok" ? "tiktok" : "meta"}">Conectar de novo</a>` : ""}
-        <label class="rotulo-campo" style="display:flex;align-items:center;gap:8px;font-weight:500">Posts por dia
+        <label class="interruptor" title="Conta nova: começa com poucos posts por dia e sobe sozinha até a meta em 4 semanas. Desligue se a conta já é estabelecida."><input type="checkbox" data-rampa ${c.rampa ? "checked" : ""}>Subir aos poucos</label>
+        <label class="rotulo-campo" style="display:flex;align-items:center;gap:8px;font-weight:500">Meta por dia
           <input class="campo" type="number" min="1" max="24" value="${c.posts_por_dia}" data-ritmo style="width:72px;padding:7px 9px"></label>
         <label class="interruptor" title="Pausar ou retomar"><input type="checkbox" data-ativa ${c.ativa ? "checked" : ""}>Ativa</label>
         <button class="mini no" data-remover title="Desconectar" aria-label="Desconectar">${icone("x")}</button>
@@ -59,7 +72,9 @@
     try {
       if (e.target.matches("[data-ritmo]")) await api(`/api/contas/${id}`, { metodo: "PUT", corpo: { posts_por_dia: Number(e.target.value) } });
       if (e.target.matches("[data-ativa]")) await api(`/api/contas/${id}`, { metodo: "PUT", corpo: { ativa: e.target.checked } });
+      if (e.target.matches("[data-rampa]")) await api(`/api/contas/${id}`, { metodo: "PUT", corpo: { rampa: e.target.checked } });
       aviso("Conta atualizada.");
+      if (e.target.matches("[data-ritmo], [data-rampa]")) carregar();       // atualiza o "Hoje: N posts"
     } catch (erro) { aviso(erro.message, { tipo: "erro" }); carregar(); }
   });
   $("#lista-contas").addEventListener("click", async (e) => {

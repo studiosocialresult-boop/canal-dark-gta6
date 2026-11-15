@@ -6,7 +6,9 @@ Regras:
 - O mesmo conteudo nunca vai duas vezes para a mesma conta, mesmo com frase ou layout diferente
   (chave_video). Variacoes de um mesmo corte sao espalhadas entre contas diferentes.
 - Cada conta posta no seu ritmo (posts por dia), dentro da janela de horario, espaçado por igual e
-  nunca com menos que o intervalo minimo entre dois posts da mesma conta (o que nao couber vai para o dia seguinte).
+  nunca com menos que o intervalo minimo da rede entre dois posts da mesma conta (o que nao couber vai para o
+  dia seguinte). Conta nova sobe aos poucos ate a meta (rampa). Numeros vindos da pesquisa em reports/.
+- Freio de seguranca: uma conta nunca publica mais que o dobro da meta dela em 24 h.
 - Falha temporaria (rede fora do ar, limite) tenta de novo mais tarde; acesso vencido marca a conta
   para conectar de novo; erro definitivo marca a publicacao como falha, com o motivo.
 - TikTok nunca e agendado pelo modo automatico: as regras dele exigem escolha e confirmacao do dono.
@@ -56,31 +58,87 @@ def _fuso() -> ZoneInfo:
     return ZoneInfo(config.FUSO)
 
 
-def horarios_do_dia(dia: date, por_dia: int, inicio_h: int, fim_h: int) -> list[datetime]:
-    """Horarios (UTC) de um dia, espacados por igual dentro da janela local."""
+def horarios_do_dia(dia: date, por_dia: int, inicio_h: int, fim_h: int, intervalo_min: int = 0) -> list[datetime]:
+    """Horarios (UTC) de um dia, espacados por igual dentro da janela local.
+
+    Se espacar por igual deixaria dois posts mais perto que `intervalo_min`, os horarios ficam a exatamente
+    esse intervalo, centralizados na janela; o que nao couber na janela fica para o dia seguinte."""
     por_dia = max(1, por_dia)
     abertura = datetime(dia.year, dia.month, dia.day, inicio_h, tzinfo=_fuso())
-    passo = (fim_h - inicio_h) * 60 / por_dia
-    # arredondado para multiplos de 5 minutos (fica mais natural: 10:35 em vez de 10:37)
-    return [(abertura + timedelta(minutes=round(passo * (k + 0.5) / 5) * 5)).astimezone(timezone.utc)
-            for k in range(por_dia)]
+    janela = (fim_h - inicio_h) * 60
+    passo = janela / por_dia
+    if passo >= intervalo_min:
+        # arredondado para multiplos de 5 minutos (fica mais natural: 10:35 em vez de 10:37)
+        minutos = [round(passo * (k + 0.5) / 5) * 5 for k in range(por_dia)]
+    else:
+        espaco = -(-intervalo_min // 5) * 5                       # intervalo arredondado para cima, em 5 min
+        cabem = min(por_dia, (janela - 1) // espaco + 1)
+        inicio = (janela - (cabem - 1) * espaco) // 2 // 5 * 5
+        minutos = [inicio + k * espaco for k in range(cabem)]
+    return [(abertura + timedelta(minutes=m)).astimezone(timezone.utc) for m in minutos]
+
+
+# ---------- ritmo de cada conta ----------
+
+SEMANAS_POR_DEGRAU = 2
+
+
+def _inicio_da_conta(conta: dict) -> date:
+    return momento(conta["criado_em"]).astimezone(_fuso()).date()
+
+
+def ritmo_no_dia(conta: dict, dia: date) -> int:
+    """Posts por dia da conta naquele dia. Conta nova (rampa ligada) comeca com poucos e sobe a cada
+    2 semanas ate a meta (posts_por_dia): postar muito numa conta sem historico faz os videos disputarem
+    o pequeno publico de teste que a rede da a ela."""
+    meta = max(1, conta["posts_por_dia"])
+    if not conta.get("rampa"):
+        return meta
+    degrau = max(0, (dia - _inicio_da_conta(conta)).days) // (7 * SEMANAS_POR_DEGRAU)
+    degraus = REDES[conta["rede"]]["rampa"]
+    return min(meta, degraus[degrau]) if degrau < len(degraus) else meta
+
+
+def resumo_ritmo(conta: dict, hoje: date | None = None) -> dict:
+    """Para a tela: quantos posts hoje e, se a conta ainda esta subindo, quando muda."""
+    hoje = hoje or agora().astimezone(_fuso()).date()
+    ritmo = ritmo_no_dia(conta, hoje)
+    resumo = {"ritmo_hoje": ritmo, "subindo": False, "proximo_ritmo": None, "muda_em": None}
+    if conta.get("rampa") and ritmo < max(1, conta["posts_por_dia"]):
+        dia = hoje
+        while ritmo_no_dia(conta, dia) == ritmo:
+            dia += timedelta(days=1)
+        resumo.update(subindo=True, proximo_ritmo=ritmo_no_dia(conta, dia), muda_em=dia.isoformat())
+    return resumo
+
+
+def intervalo_da_conta(conta: dict, usuario_id: int) -> int:
+    return banco.ler_config(usuario_id, f"intervalo_{conta['rede']}_min")
+
+
+def limite_seguro(conta: dict) -> int:
+    """Freio contra defeito: no maximo o dobro da meta da conta em 24 h, nunca acima do teto tecnico da rede.
+    (Ex.: uma repeticao que publicasse o mesmo video em sequencia para aqui, bem antes da rede bloquear.)"""
+    return min(REDES[conta["rede"]]["limite_diario"], 2 * max(1, conta["posts_por_dia"]))
 
 
 def proximos_horarios(conta: dict, quantidade: int, usuario_id: int, reservados: set[str] | None = None,
                       depois_de: datetime | None = None) -> list[datetime]:
-    """Os proximos `quantidade` horarios livres da conta, no ritmo dela."""
+    """Os proximos `quantidade` horarios livres da conta, no ritmo dela (que sobe com o tempo se ela e nova)."""
     inicio_h, fim_h = banco.ler_config(usuario_id, "janela_inicio"), banco.ler_config(usuario_id, "janela_fim")
     if not 0 <= inicio_h < fim_h <= 24:
         inicio_h, fim_h = 9, 22
-    passo = timedelta(minutes=(fim_h - inicio_h) * 60 / max(1, conta["posts_por_dia"]))
-    # distancia minima de qualquer outro post da conta: meio passo ou o intervalo minimo, o que for maior
-    folga = max(passo / 2, timedelta(minutes=banco.ler_config(usuario_id, "intervalo_minimo_min")))
+    intervalo = intervalo_da_conta(conta, usuario_id)
     ocupados = [momento(t) for t in contas.horarios_ocupados(conta["id"])] + [momento(t) for t in (reservados or set())]
     minimo = (depois_de or agora()) + timedelta(minutes=MARGEM_MIN)
     livres = []
     dia = minimo.astimezone(_fuso()).date()
     for _ in range(DIAS_A_FRENTE):
-        for horario in horarios_do_dia(dia, conta["posts_por_dia"], inicio_h, fim_h):
+        por_dia = ritmo_no_dia(conta, dia)
+        passo = timedelta(minutes=(fim_h - inicio_h) * 60 / por_dia)
+        # distancia minima de qualquer outro post da conta: meio passo ou o intervalo minimo, o que for maior
+        folga = max(passo / 2, timedelta(minutes=intervalo))
+        for horario in horarios_do_dia(dia, por_dia, inicio_h, fim_h, intervalo):
             if horario < minimo or any(abs(horario - o) < folga for o in ocupados):
                 continue
             livres.append(horario)
@@ -244,9 +302,11 @@ def publicar_uma(publicacao: dict, momento_agora: datetime | None = None) -> str
     agora_texto = texto(momento_agora or agora())
     conta = contas.ler_conta(publicacao["conta_id"])
     rede = conta["rede"]
-    if contas.publicadas_nas_ultimas_24h(conta["id"], agora_texto) >= REDES[rede]["limite_diario"]:
+    limite = limite_seguro(conta)
+    if contas.publicadas_nas_ultimas_24h(conta["id"], agora_texto) >= limite:
         contas.atualizar_publicacao(publicacao["id"], proxima_tentativa=texto((momento_agora or agora()) + timedelta(hours=1)),
-                                    erro=f"Limite diário de {REDES[rede]['nome']} atingido; tento de novo em 1 hora.")
+                                    erro=f"Freio de segurança: esta conta já publicou {limite} vídeos em 24 h "
+                                         f"(o dobro da meta dela); tento de novo em 1 hora.")
         return "agendada"
     arquivo = config.caminho_absoluto(publicacao["arquivo"])
     if not arquivo.exists():

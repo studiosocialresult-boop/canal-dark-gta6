@@ -84,7 +84,9 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
                      "limite_diario": d["limite_diario"], "duracao_max_s": d["duracao_max_s"]} for r, d in REDES.items()}
         servicos = {s: {"configurado": all(configurada(r) for r in redes_do_servico), "redes": redes_do_servico,
                         "retorno": retorno(s)} for s, (_m, redes_do_servico) in SERVICOS.items()}
-        return {"contas": contas.listar_contas(USUARIO), "redes": redes, "servicos": servicos}
+        lista = [{**c, **agendador.resumo_ritmo(c), "limite_seguro": agendador.limite_seguro(c)}
+                 for c in contas.listar_contas(USUARIO)]
+        return {"contas": lista, "redes": redes, "servicos": servicos}
 
     @app.get("/contas/conectar/{servico}")
     def conectar(servico: str):
@@ -135,6 +137,8 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
             if not 1 <= ritmo <= 24:
                 raise HTTPException(400, "O ritmo deve ficar entre 1 e 24 posts por dia.")
             campos["posts_por_dia"] = ritmo
+        if "rampa" in dados:
+            campos["rampa"] = 1 if dados["rampa"] else 0
         contas.atualizar_conta(conta_id, **campos)
         return {"ok": True}
 

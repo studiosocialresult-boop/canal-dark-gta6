@@ -47,7 +47,7 @@ const Agendar = (() => {
       const ok = c.ativa && c.estado === "conectada";
       return `<label class="frase-item" style="cursor:${ok ? "pointer" : "not-allowed"};opacity:${ok ? 1 : .55}">
         <input type="checkbox" name="conta" value="${c.id}" data-rede="${c.rede}" ${ok ? "" : "disabled"} style="accent-color:var(--acento);width:18px;height:18px">
-        ${selo(c.rede)}<span><b>${esc(c.nome)}</b> <small class="dica">${ok ? `${c.posts_por_dia} por dia` : c.estado === "conectada" ? "pausada" : "precisa conectar de novo"}</small></span></label>`;
+        ${selo(c.rede)}<span><b>${esc(c.nome)}</b> <small class="dica">${ok ? `${c.ritmo_hoje ?? c.posts_por_dia} por dia` : c.estado === "conectada" ? "pausada" : "precisa conectar de novo"}</small></span></label>`;
     }).join("");
     corpo.innerHTML = titulo + `
       <div class="secao"><h3>Contas</h3><div class="lista">${contasHtml}</div></div>

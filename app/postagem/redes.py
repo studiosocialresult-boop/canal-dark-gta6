@@ -1,6 +1,9 @@
 """Redes: o que e comum a todos os conectores de postagem (erros, resultado, limites de cada rede).
 
 Limites conferidos na documentacao oficial em 13/11/2026 (detalhes no plano.md, Fase 5).
+- limite_diario: o teto TECNICO da rede por conta em 24 h. O agendador usa um freio bem menor (o dobro da meta
+  da conta, ver agendador.limite_seguro), para um defeito nunca chegar perto dele.
+- rampa: posts por dia de uma conta nova nas semanas 1-2 e 3-4; da 5a semana em diante vale a meta da conta.
 """
 from dataclasses import dataclass, field
 
@@ -9,18 +12,18 @@ import requests
 REDES = {
     "youtube": {"nome": "YouTube Shorts", "chaves_env": ("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET"),
                 "limite_diario": 100, "duracao_min_s": 1, "duracao_max_s": 180, "automatico": True,
-                "legenda_max": 5000},
+                "legenda_max": 5000, "rampa": (2, 3)},
     "instagram": {"nome": "Instagram Reels", "chaves_env": ("META_APP_ID", "META_APP_SECRET"),
                   "limite_diario": 50, "duracao_min_s": 3, "duracao_max_s": 900, "automatico": True,
-                  "legenda_max": 2200},
+                  "legenda_max": 2200, "rampa": (1, 2)},
     "facebook": {"nome": "Facebook Reels", "chaves_env": ("META_APP_ID", "META_APP_SECRET"),
                  "limite_diario": 30, "duracao_min_s": 3, "duracao_max_s": 90, "automatico": True,
-                 "legenda_max": 2200},
+                 "legenda_max": 2200, "rampa": (1, 2)},
     # TikTok: as regras exigem que o dono escolha a privacidade e confirme cada post. Por isso nunca entra
     # no modo automatico. Sem auditoria do app, so publica como privado (SELF_ONLY) em conta privada.
     "tiktok": {"nome": "TikTok", "chaves_env": ("TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"),
                "limite_diario": 15, "duracao_min_s": 3, "duracao_max_s": 600, "automatico": False,
-               "legenda_max": 2200},
+               "legenda_max": 2200, "rampa": (1, 2)},
 }
 
 TEMPO_LIMITE = 60          # segundos de espera por resposta (fora o envio do arquivo)

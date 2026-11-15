@@ -9,7 +9,7 @@ from app import banco
 from app.postagem import cofre
 from app.postagem.redes import REDES, Credenciais
 
-CAMPOS_CONTA = {"nome", "foto", "ativa", "posts_por_dia", "estado", "erro"}
+CAMPOS_CONTA = {"nome", "foto", "ativa", "posts_por_dia", "rampa", "estado", "erro"}
 CAMPOS_PUBLICACAO = {"titulo", "legenda", "opcoes", "agendada_para", "estado", "tentativas", "proxima_tentativa",
                      "id_externo", "url", "erro", "publicado_em"}
 
@@ -40,7 +40,7 @@ def listar_contas(usuario_id: int) -> list[dict]:
     """Contas do usuario, sem as credenciais (o painel nunca recebe os tokens)."""
     with closing(banco.conectar()) as conexao:
         linhas = conexao.execute(
-            "SELECT id, usuario_id, rede, id_externo, nome, foto, ativa, posts_por_dia, estado, erro, criado_em "
+            "SELECT id, usuario_id, rede, id_externo, nome, foto, ativa, posts_por_dia, rampa, estado, erro, criado_em "
             "FROM contas WHERE usuario_id = ? ORDER BY rede, nome", (usuario_id,)).fetchall()
     return [dict(l) for l in linhas]
 
