@@ -9,7 +9,8 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
-from datetime import timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from types import SimpleNamespace
 from unittest import mock
 
@@ -23,7 +24,7 @@ if "CANAL_CHAVE_SECRETA" not in os.environ:
 
 from app import banco, config  # noqa: E402
 from app.contratos import CorteProposto  # noqa: E402
-from app.desempenho import repositorio  # noqa: E402
+from app.desempenho import relatorio, repositorio  # noqa: E402
 from app.postagem import agendador, contas  # noqa: E402
 from app.postagem.redes import Credenciais, ErroPostagem, Numeros  # noqa: E402
 
@@ -392,6 +393,117 @@ class TesteColetor(unittest.TestCase):
     def test_duas_rodadas_ao_mesmo_tempo(self):
         with self.coletor._trava:
             self.assertTrue(self.coletor.rodar()["ocupado"])
+
+
+class TesteRelatorio(unittest.TestCase):
+    def setUp(self):
+        limpar()
+        self.conta = criar_conta()
+
+    def post(self, horas_atras, *, v24=None, atual=None, n24=None, n_atual=None, conta=None,
+             modo=None, nota=None, canal=None) -> int:
+        corte = None
+        if modo or nota is not None or canal:
+            corte = criar_corte(modo or "narrado", 80 if nota is None else nota, canal or "Canal X")
+        p = publicar(conta or self.conta, horas_atras, corte_id=corte)
+        for marco, valor, pronto in (("24h", v24, n24), ("atual", atual, n_atual)):
+            numeros = pronto if pronto is not None else (Numeros(visualizacoes=valor) if valor is not None else None)
+            if numeros is not None:
+                repositorio.gravar_leitura(1, p, marco, numeros, agora_texto())
+        return p
+
+    def test_media_por_modo_e_poucos_dados(self):
+        for v in (100, 200, 300):
+            self.post(30, v24=v, atual=v, modo="narrado")
+        for v in (900, 950):
+            self.post(30, v24=v, atual=v, modo="original")
+        modo = {g["rotulo"]: g for g in relatorio.montar(1, 7, "visualizacoes")["grupos"]["modo"]}
+        self.assertEqual((modo["narrado"]["posts"], modo["narrado"]["media"]), (3, 200))
+        self.assertEqual((modo["original"]["posts"], modo["original"]["media"]), (2, None))
+
+    def test_totais_usam_a_leitura_atual(self):
+        self.post(30, v24=100, atual=400)
+        self.post(2, atual=50)
+        t = relatorio.montar(1, 7, "visualizacoes")["totais"]
+        self.assertEqual((t["visualizacoes"], t["posts"]), (450, 2))
+
+    def test_numero_vazio_nao_entra_na_media(self):          # curtidas ocultas em um dos quatro posts
+        for c in (10, 20, 30):
+            self.post(30, n24=Numeros(1, c, 0))
+        self.post(30, n24=Numeros(1, None, 0))
+        rede = relatorio.montar(1, 7, "curtidas")["grupos"]["rede"][0]
+        self.assertEqual((rede["posts"], rede["media"]), (3, 20))
+
+    def test_rede_sem_a_medida_e_avisada(self):
+        insta = criar_conta("instagram", "Insta")
+        self.post(30, conta=insta, n24=Numeros(None, 5, 1), n_atual=Numeros(None, 5, 1))
+        self.assertEqual(relatorio.montar(1, 7, "visualizacoes")["sem_medida"], ["instagram"])
+        self.assertEqual(relatorio.montar(1, 7, "curtidas")["sem_medida"], [])
+
+    def test_faixas_de_nota(self):
+        for nota in (85, 90, 80):
+            self.post(30, v24=1000, nota=nota)
+        for nota in (70, 79, 75):
+            self.post(30, v24=400, nota=nota)
+        notas = relatorio.montar(1, 7, "visualizacoes")["grupos"]["nota"]
+        self.assertEqual([(g["rotulo"], g["media"]) for g in notas],
+                         [("80 ou mais", 1000), ("70 a 79", 400), ("abaixo de 70", None)])
+
+    def test_variacao_contra_o_periodo_anterior(self):
+        self.post(24 * 10, v24=1000)
+        self.post(30, v24=1320)
+        self.assertEqual(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"], 32.0)
+
+    def test_variacao_sem_base_fica_vazia(self):
+        self.post(30, v24=500)
+        self.assertIsNone(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"])
+
+    def test_melhores_e_piores_nao_repetem(self):
+        for v in range(1, 8):
+            self.post(30, v24=v * 100)                       # 7 posts
+        r = relatorio.montar(1, 7, "visualizacoes")
+        self.assertEqual([p["24h"] for p in r["melhores"]], [700, 600, 500, 400, 300])
+        self.assertEqual([p["24h"] for p in r["piores"]], [100, 200])
+
+    def test_melhor_horario_precisa_de_base(self):
+        self.post(30, v24=100)
+        self.assertIsNone(relatorio.montar(1, 7, "visualizacoes")["totais"]["melhor_horario"])
+
+    def test_filtro_por_conta(self):
+        outra = criar_conta("youtube", "Canal 2")
+        self.post(30, v24=100, atual=100)
+        self.post(30, v24=900, atual=900, conta=outra)
+        self.assertEqual(relatorio.montar(1, 7, "visualizacoes", conta_id=outra)["totais"]["visualizacoes"], 900)
+
+    def test_periodo_vazio(self):
+        r = relatorio.montar(1, 7, "visualizacoes")
+        self.assertEqual((r["totais"]["posts"], r["totais"]["visualizacoes"], r["melhores"], r["piores"]),
+                         (0, None, [], []))
+        self.assertEqual(len(r["grupos"]["hora"]), 24)
+
+    def test_pedido_invalido(self):
+        with self.assertRaises(ValueError):
+            relatorio.montar(1, 5, "visualizacoes")
+        with self.assertRaises(ValueError):
+            relatorio.montar(1, 7, "alcance")
+
+    def test_hora_local_e_melhor_horario(self):
+        fuso = ZoneInfo(config.FUSO)
+        dia = agendador.agora().astimezone(fuso).date() - timedelta(days=2)
+
+        def post_as(hora_local, valor):
+            p = self.post(30, v24=valor)
+            quando = datetime(dia.year, dia.month, dia.day, hora_local, 30, tzinfo=fuso)
+            contas.atualizar_publicacao(p, publicado_em=agendador.texto(quando))
+
+        for _ in range(4):
+            post_as(19, 1000)
+        for _ in range(3):
+            post_as(18, 100)
+        r = relatorio.montar(1, 7, "visualizacoes")
+        hora = {g["rotulo"]: g for g in r["grupos"]["hora"]}
+        self.assertEqual(hora["19"]["posts"], 4)
+        self.assertEqual(r["totais"]["melhor_horario"], {"inicio_h": 19, "fim_h": 21})
 
 
 if __name__ == "__main__":
