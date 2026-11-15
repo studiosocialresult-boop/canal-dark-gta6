@@ -280,6 +280,16 @@ Evitar `max`: custa muito e costuma pensar demais.
 - **Pronto quando:** roda 7 dias sem intervenção.
 - **Modelo:** Opus 5.5 para o deploy; **Fable 5.2** para a revisão final de segurança e do código inteiro.
 
+### Fase 8 — Desempenho (aprovada em 14/11/2026, ainda não construída)
+- O painel busca nas redes as visualizações, curtidas e comentários de cada post publicado e mostra o que está funcionando. Desenho completo em `docs/superpowers/specs/2026-11-14-desempenho-design.md`.
+- **Em camadas:** YouTube primeiro (a permissão atual já deixa ler tudo). Instagram e Facebook entram com curtidas e comentários; visualizações deles dependem de uma permissão a mais na Meta e de reconectar a conta. TikTok só depois da auditoria, para não mexer no app enquanto ele está em análise.
+- Leitura de hora em hora dos posts com menos de 7 dias. Guarda a leitura mais recente e uma "foto" com 24 horas, 3 dias e 7 dias, para comparar posts de idades diferentes de forma justa.
+- Tela nova **Desempenho** (totais do período, média por modo, nota, rede, fonte, tipo e horário, melhores e piores posts) e total de visualizações no cartão de cada corte na tela **Cortes**.
+- Não gasta créditos de IA. A leitura roda separada do publicador: falha na leitura nunca atrapalha um post.
+- **Fora desta fase:** a IA aprender com os números e o agendador escolher horário sozinho (ficam para depois, usando os dados guardados aqui).
+- **Pronto quando:** com posts reais, os números do YouTube aparecem na tela em até uma hora, a foto de 24 h é guardada no dia seguinte e o total aparece no cartão do corte.
+- **Modelo:** Opus 5.5 (high) para a leitura nas redes; Sonnet 5.5 (medium) para banco, relatório e tela.
+
 ## 7. Contas e chaves necessárias
 
 | Para quê | O que criar | Quando |

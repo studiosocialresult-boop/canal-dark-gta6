@@ -13,3 +13,6 @@ cookies.txt
 
 # Gravacoes de tela (video de demonstracao) ficam fora do git
 deploy/marca/*.mp4
+
+# Rascunhos de trabalho do Claude Code
+.superpowers/
