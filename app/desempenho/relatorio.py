@@ -136,17 +136,21 @@ def _melhor_horario(valores: dict[int, list[int]]) -> dict | None:
     return None if melhor is None else {"inicio_h": melhor, "fim_h": melhor + 2}
 
 
-def _soma_24h(linhas: list, medida: str) -> int | None:
+def _fotos_24h(linhas: list, medida: str) -> list[int]:
     valores = [_valor(l["leituras"].get("24h"), medida) for l in linhas]
-    valores = [v for v in valores if v is not None]
-    return sum(valores) if valores else None
+    return [v for v in valores if v is not None]
 
 
 def _variacao(atuais: list, anteriores: list, medida: str) -> float | None:
-    agora, antes = _soma_24h(atuais, medida), _soma_24h(anteriores, medida)
-    if agora is None or not antes:
+    """Media por post (foto de 24 h) deste periodo contra a do anterior. Compara medias, nao somas:
+    os posts mais novos ainda nao tem foto, e uma soma daria queda falsa."""
+    agora, antes = _fotos_24h(atuais, medida), _fotos_24h(anteriores, medida)
+    if len(agora) < MINIMO_POR_GRUPO or len(antes) < MINIMO_POR_GRUPO:
         return None
-    return round((agora - antes) / antes * 100, 1)
+    media_antes = sum(antes) / len(antes)
+    if not media_antes:
+        return None
+    return round((sum(agora) / len(agora) - media_antes) / media_antes * 100, 1)
 
 
 def _totais(atuais: list, anteriores: list, medida: str, por_hora: dict) -> dict:

@@ -249,6 +249,16 @@ class TesteNumerosMeta(unittest.TestCase):
         with mock.patch.object(self.meta, "chamar", side_effect=chamar):
             self.assertEqual(self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"]), {"m1": Numeros(None, 5, 1)})
 
+    def test_lote_recusado_com_outro_codigo_cai_para_um_por_um(self):
+        def chamar(metodo, url, **kwargs):
+            if "ids" in kwargs["params"]:
+                return erro_meta(803, None, 400)
+            if url.endswith("/m2"):
+                return erro_meta(100, 33)
+            return resposta_http(200, {"id": "m1", "like_count": 5, "comments_count": 1})
+        with mock.patch.object(self.meta, "chamar", side_effect=chamar):
+            self.assertEqual(self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"]), {"m1": Numeros(None, 5, 1)})
+
     def test_nenhum_post_lido_nao_marca_todos_como_apagados(self):
         with mock.patch.object(self.meta, "chamar", return_value=erro_meta(100, 33)):
             with self.assertRaises(ErroPostagem) as c:
@@ -323,6 +333,25 @@ class TesteColetor(unittest.TestCase):
         self.rodar({"v1": Numeros(5, 5, 5), "v2": Numeros(7, 7, 7)})
         self.assertEqual(set(leituras_de(a)), {"atual", "3d"})
         self.assertEqual(set(leituras_de(b)), {"atual", "7d"})
+
+    def test_foto_de_7_dias_tem_6_horas_de_tolerancia(self):
+        p = publicar(self.conta, 173, id_externo="v1")
+        self.rodar({"v1": Numeros(7, 7, 7)})
+        self.assertEqual(set(leituras_de(p)), {"atual", "7d"})
+
+    def test_erro_ao_gravar_nao_derruba_as_outras_contas(self):
+        outra = criar_conta("youtube", "Canal 2")
+        a, b = publicar(self.conta, 5, id_externo="v1"), publicar(outra, 5, id_externo="v2")
+        original = self.coletor.repositorio.gravar_leitura
+
+        def gravar(usuario, pub, marco, numeros, quando):
+            if pub == a:
+                raise sqlite3.OperationalError("database is locked")
+            return original(usuario, pub, marco, numeros, quando)
+        with mock.patch.object(self.coletor.repositorio, "gravar_leitura", side_effect=gravar):
+            resultado, _ = self.rodar({"v1": Numeros(1, 1, 1), "v2": Numeros(2, 2, 2)})
+        self.assertEqual(resultado["falhas"], 1)
+        self.assertEqual(set(leituras_de(b)), {"atual"})
 
     def test_post_com_mais_de_7_dias_nao_e_lido(self):
         publicar(self.conta, 200, id_externo="velho")
@@ -450,9 +479,23 @@ class TesteRelatorio(unittest.TestCase):
                          [("80 ou mais", 1000), ("70 a 79", 400), ("abaixo de 70", None)])
 
     def test_variacao_contra_o_periodo_anterior(self):
-        self.post(24 * 10, v24=1000)
-        self.post(30, v24=1320)
+        for _ in range(3):
+            self.post(24 * 10, v24=1000)
+            self.post(30, v24=1320)
         self.assertEqual(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"], 32.0)
+
+    def test_variacao_nao_depende_de_quantos_posts_ja_tem_foto(self):    # canal estavel, cobertura desigual
+        for _ in range(3):
+            self.post(30, v24=1000)                      # periodo atual: 3 posts com foto
+        for _ in range(9):
+            self.post(24 * 10, v24=1000)                 # periodo anterior: 9 posts com foto
+        self.post(2, atual=50)                           # post novo, ainda sem foto
+        self.assertEqual(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"], 0.0)
+
+    def test_variacao_com_poucas_fotos_fica_vazia(self):
+        self.post(30, v24=1000)
+        self.post(24 * 10, v24=500)
+        self.assertIsNone(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"])
 
     def test_variacao_sem_base_fica_vazia(self):
         self.post(30, v24=500)

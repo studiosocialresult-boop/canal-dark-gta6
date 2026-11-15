@@ -28,7 +28,7 @@ LEITORES = {"youtube": youtube.ler_numeros, "instagram": meta.ler_numeros_instag
             "facebook": meta.ler_numeros_facebook}           # TikTok: sem leitor nesta fase
 MARCOS = (("24h", 24), ("3d", 72), ("7d", 168))              # (nome, horas de vida)
 TOLERANCIA_H = 6
-IDADE_MAXIMA_H = 170
+IDADE_MAXIMA_H = 168 + TOLERANCIA_H                           # ate a foto de 7 dias poder ser tirada
 INTERVALO_S = 3600
 
 _trava = threading.Lock()
@@ -79,6 +79,15 @@ def _ler_conta(conta_id: int, posts: list[dict], agora: datetime, resultado: dic
         log.exception("Desempenho: erro inesperado ao ler a conta %d (%s)", conta_id, rede)
         return
 
+    try:
+        _gravar(posts, numeros, agora, resultado)
+    except Exception:                                 # banco ocupado etc.: as outras contas seguem
+        resultado["falhas"] += 1
+        log.exception("Desempenho: erro ao gravar os numeros da conta %d (%s)", conta_id, rede)
+
+
+def _gravar(posts: list[dict], numeros: dict, agora: datetime, resultado: dict) -> None:
+    rede = posts[0]["rede"]
     agora_texto = agendador.texto(agora)
     gravados = repositorio.marcos_gravados([p["id"] for p in posts])
     for post in posts:
@@ -109,7 +118,7 @@ class Coletor(threading.Thread):
             try:
                 rodar()
             except Exception as erro:            # nunca deixa a thread morrer
-                log.error("Coletor de desempenho: erro inesperado: %s", erro)
+                log.exception("Coletor de desempenho: erro inesperado: %s", erro)
             self._parar.wait(self.intervalo_s)
 
     def parar(self) -> None:

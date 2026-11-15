@@ -307,7 +307,7 @@ def _ler_numeros(rede: str, credenciais: Credenciais, ids: list[str], campos: st
         if resposta.status_code == 200 and all(isinstance(dados.get(i), dict) for i in lote):
             numeros.update({i: converter(dados[i]) for i in lote})
             continue
-        if resposta.status_code == 200 or _codigo(resposta)[0] == 100:
+        if resposta.status_code == 200 or _vale_tentar_um_por_um(resposta, rede):
             # o lote nao veio inteiro (provavelmente um post apagado): pergunta um por um
             for post_id in lote:
                 um = chamar("GET", f"{GRAPH}/{post_id}", rede=rede, params={"fields": campos, "access_token": token})
@@ -324,6 +324,12 @@ def _ler_numeros(rede: str, credenciais: Credenciais, ids: list[str], campos: st
         raise ErroPostagem(f"A Meta não devolveu nenhum post desta conta ({len(talvez_apagados)}). "
                            "Leio de novo mais tarde.")
     return numeros
+
+
+def _vale_tentar_um_por_um(resposta, rede: str) -> bool:
+    """Lote recusado: so desiste da conta inteira se o erro e de acesso vencido ou de espera."""
+    erro = _erro_leitura(resposta, rede)
+    return not (erro.reconectar or erro.temporario)
 
 
 def _codigo(resposta) -> tuple:
