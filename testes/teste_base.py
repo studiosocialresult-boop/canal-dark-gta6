@@ -1122,6 +1122,13 @@ class TesteTemplates(unittest.TestCase):
             self.assertEqual(gera.call_args.args[0], "Rockstar confirma 30 FPS")        # le o titulo do corte
         with mock.patch.object(self.frases, "gerar_para_video", side_effect=modulo_ia.ErroIA("fora")):
             self.assertEqual(self.cliente.post(f"/api/cortes/{corte}/modelo/frases", json={}).status_code, 502)
+        with mock.patch.object(self.frases, "gerar_para_video", return_value=["Frase guardada"]) as gera:
+            url_auto = f"/api/cortes/{self._corte_com_video('Outro corte')}/modelo/frase-auto"
+            primeira = self.cliente.post(url_auto).json()
+            segunda = self.cliente.post(url_auto).json()
+            self.assertEqual((primeira["frase"], primeira["nova"]), ("Frase guardada", True))
+            self.assertEqual((segunda["frase"], segunda["nova"]), ("Frase guardada", False))
+            self.assertEqual(gera.call_count, 1)                                         # a IA so e chamada uma vez
         previa = self.cliente.get(f"/api/cortes/{corte}/modelo/previa.jpg", params={"template_id": template_id, "frase": "Teste"})
         self.assertEqual(previa.status_code, 200)
         self.assertEqual(previa.headers["content-type"], "image/jpeg")

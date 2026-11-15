@@ -524,7 +524,24 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
             raise HTTPException(400, str(erro))
         except ia.ErroIA as erro:
             raise HTTPException(502, str(erro))
+        if frases:
+            banco.atualizar_corte(corte_id, frase_gancho=frases[0])
         return {"frases": frases}
+
+    @app.post("/api/cortes/{corte_id}/modelo/frase-auto")
+    def api_frase_auto(corte_id: int):
+        """A frase do gancho ja pronta: devolve a guardada ou, na primeira vez, a IA escreve uma e guarda."""
+        corte = _corte_do_dono(corte_id)
+        if corte["frase_gancho"]:
+            return {"frase": corte["frase_gancho"], "nova": False}
+        try:
+            frases = modulo_frases.gerar_para_video(corte["titulo"], corte["motivo"], 1, usuario_id=USUARIO)
+        except (TypeError, ValueError) as erro:
+            raise HTTPException(400, str(erro))
+        except ia.ErroIA as erro:
+            raise HTTPException(502, str(erro))
+        banco.atualizar_corte(corte_id, frase_gancho=frases[0])
+        return {"frase": frases[0], "nova": True}
 
     @app.get("/api/cortes/{corte_id}/modelo/previa.jpg")
     def api_previa_do_corte(corte_id: int, template_id: int, frase: str = ""):
@@ -541,7 +558,7 @@ def registrar(app: FastAPI, paginas, contexto) -> None:
             imagem = renderizar.previa(t, texto, provisoria)
         except renderizar.ErroRender as erro:
             raise HTTPException(422, str(erro))
-        return FileResponse(imagem, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+        return FileResponse(imagem, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60"})
 
     @app.post("/api/cortes/{corte_id}/modelo/gerar")
     def api_gerar_do_corte(corte_id: int, dados: dict = Body(...)):

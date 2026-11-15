@@ -98,7 +98,8 @@ CREATE TABLE IF NOT EXISTS cortes (
     estado TEXT NOT NULL DEFAULT 'proposto',
     caminho_arquivo TEXT,
     erro TEXT,
-    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+    frase_gancho TEXT
 );
 
 -- Narracao de um corte: primeiro o roteiro (texto), depois o audio.
@@ -345,7 +346,7 @@ CAMPOS_VIDEO = {
     "titulo", "canal", "duracao_s", "idioma", "caminho_arquivo",
     "caminho_transcricao", "estado", "erro",
 }
-CAMPOS_CORTE = {"estado", "caminho_arquivo", "erro"}
+CAMPOS_CORTE = {"estado", "caminho_arquivo", "erro", "frase_gancho"}
 CAMPOS_NARRACAO = {"caminho_audio", "estado", "erro"}
 CAMPOS_FILA = {"estado", "progresso", "resultado", "iniciado_em", "terminado_em"}
 
@@ -372,6 +373,9 @@ def criar_tabelas() -> None:
 
 def _garantir_colunas(conexao) -> None:
     """Bancos antigos nao tem colunas que foram acrescentadas depois. Acrescenta sem perder dados."""
+    colunas_cortes = {l["name"] for l in conexao.execute("PRAGMA table_info(cortes)")}
+    if colunas_cortes and "frase_gancho" not in colunas_cortes:
+        conexao.execute("ALTER TABLE cortes ADD COLUMN frase_gancho TEXT")
     colunas_midias = {l["name"] for l in conexao.execute("PRAGMA table_info(template_midias)")}
     if "avulsa" not in colunas_midias:
         conexao.execute("ALTER TABLE template_midias ADD COLUMN avulsa INTEGER NOT NULL DEFAULT 0")

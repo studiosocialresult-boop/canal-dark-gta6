@@ -270,7 +270,7 @@
 
   // ---------- postar com template (frase do gancho + modelo, sem sair da janela) ----------
 
-  const modelo = { templates: null, templateId: null, corteId: null, frase: "", gerandoFrases: false,
+  const modelo = { templates: null, templateId: null, corteId: null, frase: "", gerandoFrases: false, carregandoFrase: false,
                    enviando: false, saidas: [], relogio: null, relogioPrevia: null };
   try { modelo.templateId = Number(localStorage.getItem("canal_modelo_template")) || null; } catch (e) { /* sem memória do navegador: tudo bem */ }
   const caixaModelo = $("#corte-modelo");
@@ -278,7 +278,7 @@
   async function carregarTemplatesDoModelo() {
     try {
       const { templates } = await api("/api/templates");
-      modelo.templates = templates;
+      modelo.templates = templates.filter((t) => t.layout !== "cheio");
     } catch (e) { modelo.templates = []; }
     if (!modelo.templates.some((t) => t.id === modelo.templateId)) modelo.templateId = modelo.templates.length ? modelo.templates[0].id : null;
     if (estado.aberto) desenharModelo();
@@ -298,17 +298,23 @@
     }
   }
 
-  function previaDoModelo() {
+  function urlPrevia(templateId) {
+    return `/api/cortes/${modelo.corteId}/modelo/previa.jpg?template_id=${templateId}&frase=${encodeURIComponent(modelo.frase)}`;
+  }
+
+  /** Atualiza as miniaturas de todos os templates com a frase atual (espera um instante enquanto se digita). */
+  function previaDoModelo(esperar = 700) {
     clearTimeout(modelo.relogioPrevia);
     modelo.relogioPrevia = setTimeout(() => {
-      const imagem = $("#modelo-previa");
-      if (!imagem || !modelo.templateId) return;
-      const nova = new Image();
-      nova.onload = () => { imagem.src = nova.src; imagem.style.opacity = 1; };
-      nova.onerror = () => { imagem.style.opacity = .25; };
-      imagem.style.opacity = .5;
-      nova.src = `/api/cortes/${modelo.corteId}/modelo/previa.jpg?template_id=${modelo.templateId}&frase=${encodeURIComponent(modelo.frase)}`;
-    }, 350);
+      if (modelo.carregandoFrase) return;
+      caixaModelo.querySelectorAll("[data-previa-template]").forEach((img) => {
+        const nova = new Image();
+        img.style.opacity = .5;
+        nova.onload = () => { img.src = nova.src; img.style.opacity = 1; img.hidden = false; img.nextElementSibling.style.display = "none"; };
+        nova.onerror = () => { img.style.opacity = .25; };
+        nova.src = urlPrevia(img.dataset.previaTemplate);
+      });
+    }, esperar);
   }
 
   function itemDoModelo(s) {
@@ -338,31 +344,52 @@
       return;
     }
     const itens = modelo.saidas.map((s) => `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--linha)">${itemDoModelo(s)}</div>`).join("");
+    const miniaturas = modelo.templates.map((t) => {
+      const escolhido = t.id === modelo.templateId;
+      const pronta = !modelo.carregandoFrase;
+      return `<button type="button" data-escolher-template="${t.id}" aria-pressed="${escolhido}" title="${esc(t.nome)} · ${esc(t.layout_nome)}"
+          style="flex:none;width:96px;padding:4px;border-radius:12px;background:none;cursor:pointer;text-align:center;border:2px solid ${escolhido ? "var(--acento)" : "transparent"}">
+        <div style="position:relative;width:88px;height:156px;border-radius:8px;background:#0002;overflow:hidden">
+          <img data-previa-template="${t.id}" onload="this.nextElementSibling.style.display='none'" ${pronta ? `src="${urlPrevia(t.id)}"` : "hidden"} alt="" width="88" height="156" style="width:100%;height:100%;object-fit:cover;transition:opacity .2s">
+          <span class="dica" style="position:absolute;inset:0;display:${pronta ? "none" : "flex"};align-items:center;justify-content:center;font-size:11px">carregando…</span>
+        </div>
+        <span class="dica" style="display:block;margin-top:4px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.nome)}${escolhido ? " ✓" : ""}</span>
+      </button>`;
+    }).join("");
     caixaModelo.innerHTML = `
-      <div style="display:flex;gap:14px;align-items:flex-start">
-        <img id="modelo-previa" width="108" height="192" alt="Prévia" style="border-radius:10px;background:#0002;object-fit:cover;flex:none;transition:opacity .2s">
-        <div style="flex:1;min-width:0;display:grid;gap:8px">
-          <select class="campo-select" id="modelo-template" aria-label="Template">${modelo.templates.map((t) => `<option value="${t.id}" ${t.id === modelo.templateId ? "selected" : ""}>${esc(t.nome)} · ${esc(t.layout_nome)}</option>`).join("")}</select>
-          <textarea class="campo" id="modelo-frase" maxlength="240" rows="2" placeholder="Frase do gancho: aparece escrita no vídeo">${esc(modelo.frase)}</textarea>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="botao pequeno" id="modelo-sugerir" ${modelo.gerandoFrases ? "disabled" : ""}>${modelo.gerandoFrases ? "Escrevendo…" : (modelo.frase.trim() ? "Outra frase" : "Gerar frase do gancho")}</button>
-            <button class="botao primario pequeno" id="modelo-gerar" ${modelo.enviando ? "disabled" : ""}>Gerar vídeo</button></div>
-          <span class="dica">A IA lê o título do corte e escreve a frase. Custa uma fração de centavo. Você pode editar o texto.</span>
-        </div></div>
+      <div style="display:grid;gap:10px">
+        <div id="modelo-miniaturas" style="display:flex;gap:6px;overflow-x:auto;padding-bottom:4px">${miniaturas}</div>
+        <textarea class="campo" id="modelo-frase" maxlength="240" rows="2" placeholder="${modelo.carregandoFrase ? "Escrevendo a frase do gancho…" : "Frase do gancho: aparece escrita no vídeo"}">${esc(modelo.frase)}</textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="botao pequeno" id="modelo-sugerir" ${modelo.gerandoFrases || modelo.carregandoFrase ? "disabled" : ""}>${modelo.gerandoFrases ? "Escrevendo…" : "Outra frase"}</button>
+          <button class="botao primario pequeno" id="modelo-gerar" ${modelo.enviando ? "disabled" : ""}>Gerar vídeo</button></div>
+        <span class="dica">Clique no template que você gostou e gere o vídeo. A frase foi escrita pela IA (uma fração de centavo); você pode editar.</span>
+      </div>
       ${itens ? `<div style="margin-top:10px">${itens}</div>` : ""}`;
-    previaDoModelo();
   }
 
   /** Chamada pelo preencherModal a cada corte aberto. */
   function iniciarModelo(c, novoVideo) {
     if (novoVideo || modelo.corteId !== c.id) {
       clearTimeout(modelo.relogio);
-      Object.assign(modelo, { corteId: c.id, frase: "", saidas: [], gerandoFrases: false, enviando: false });
-      if (c.midia) carregarSaidasDoModelo();
+      Object.assign(modelo, { corteId: c.id, frase: "", saidas: [], gerandoFrases: false, enviando: false, carregandoFrase: !!c.midia });
+      if (c.midia) { carregarSaidasDoModelo(); carregarFraseAuto(c.id); }
     }
     if (modelo.templates === null) carregarTemplatesDoModelo();
     if (!caixaModelo.querySelector("#modelo-template") || novoVideo) desenharModelo();
     else $("#corte-modelo-bloco").hidden = !(c.midia && !["falhou", "descartado"].includes(c.estado));
+  }
+
+  /** A frase do gancho já pronta: a guardada, ou a IA escreve uma na primeira vez. */
+  async function carregarFraseAuto(id) {
+    try {
+      const r = await api(`/api/cortes/${id}/modelo/frase-auto`, { metodo: "POST" });
+      if (modelo.corteId === id) modelo.frase = r.frase;
+      if (r.nova) Painel.atualizarGasto();
+    } catch (erro) { /* sem frase: as prévias usam um texto de exemplo e ele escreve a sua */ }
+    if (modelo.corteId !== id) return;
+    modelo.carregandoFrase = false;
+    desenharModelo();
   }
 
   async function gerarFrasesDoModelo() {
@@ -389,21 +416,26 @@
     if (modelo.corteId === id) await carregarSaidasDoModelo();
   }
 
-  caixaModelo.addEventListener("change", (e) => {
-    if (e.target.id !== "modelo-template") return;
-    modelo.templateId = Number(e.target.value);
-    try { localStorage.setItem("canal_modelo_template", String(modelo.templateId)); } catch (x) { /* ok */ }
-    previaDoModelo();
-  });
   caixaModelo.addEventListener("input", (e) => {
     if (e.target.id !== "modelo-frase") return;
     modelo.frase = e.target.value;
-    previaDoModelo();
+    previaDoModelo(900);
   });
   caixaModelo.addEventListener("click", (e) => {
     const alvo = e.target.closest("button");
     if (!alvo) return;
-    if (alvo.id === "modelo-sugerir") gerarFrasesDoModelo();
+    if (alvo.dataset.escolherTemplate) {
+      modelo.templateId = Number(alvo.dataset.escolherTemplate);
+      try { localStorage.setItem("canal_modelo_template", String(modelo.templateId)); } catch (x) { /* ok */ }
+      caixaModelo.querySelectorAll("[data-escolher-template]").forEach((b) => {
+        const ativo = Number(b.dataset.escolherTemplate) === modelo.templateId;
+        b.setAttribute("aria-pressed", ativo);
+        b.style.borderColor = ativo ? "var(--acento)" : "transparent";
+        const nome = b.querySelector("span.dica:last-child");
+        if (nome) nome.textContent = nome.textContent.replace(" ✓", "") + (ativo ? " ✓" : "");
+      });
+    }
+    else if (alvo.id === "modelo-sugerir") gerarFrasesDoModelo();
     else if (alvo.id === "modelo-gerar") gerarVideoDoModelo(modelo.frase, modelo.templateId);
     else if (alvo.dataset.modeloAgendar) { const sid = Number(alvo.dataset.modeloAgendar); fechar(); Agendar.abrir({ saidas: [sid] }); }
     else if (alvo.dataset.modeloRefazer) {
