@@ -543,5 +543,33 @@ class TesteTelaDesempenho(unittest.TestCase):
             self.assertEqual(self.cliente.post("/api/desempenho/atualizar").json()["lidas"], 3)
 
 
+class TesteCortesComNumeros(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+        from app.painel import servidor
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        limpar()
+        self.conta = criar_conta()
+
+    def test_corte_mostra_a_soma_das_visualizacoes(self):
+        corte, sem_post = criar_corte(), criar_corte()
+        a, b = publicar(self.conta, 5, corte_id=corte), publicar(criar_conta("youtube", "Canal 2"), 5, corte_id=corte)
+        repositorio.gravar_leitura(1, a, "atual", Numeros(1000, 1, 1), "2026-11-14 10:00:00")
+        repositorio.gravar_leitura(1, b, "atual", Numeros(500, 1, 1), "2026-11-14 10:00:00")
+        cortes = {c["id"]: c for c in self.cliente.get("/api/cortes").json()["cortes"]}
+        self.assertEqual(cortes[corte]["visualizacoes"], 1500)
+        self.assertIsNone(cortes[sem_post]["visualizacoes"])
+
+    def test_consulta_o_repositorio_uma_vez_so(self):
+        criar_corte(), criar_corte()
+        with mock.patch("app.desempenho.repositorio.visualizacoes_por_corte", return_value={}) as chamada:
+            self.cliente.get("/api/cortes")
+        self.assertEqual(chamada.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

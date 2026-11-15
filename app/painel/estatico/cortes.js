@@ -75,7 +75,7 @@
         <div class="corte-titulo">${esc(c.titulo)}</div>
       </div>
       <div class="corte-pe">
-        <div class="corte-fonte" title="${esc(c.video_titulo)}"><b>${esc(c.canal || "—")}</b> · ${Math.round(c.duracao_s)} s</div>
+        <div class="corte-fonte" title="${esc(c.video_titulo)}"><b>${esc(c.canal || "—")}</b> · ${Math.round(c.duracao_s)} s${c.visualizacoes != null ? ` · <a href="/desempenho" title="Ver o desempenho">${c.visualizacoes.toLocaleString("pt-BR")} visualizações</a>` : ""}</div>
         ${acoes}
       </div></article>`;
   }
