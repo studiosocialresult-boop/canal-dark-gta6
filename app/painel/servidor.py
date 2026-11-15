@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from app import avisos, banco, config
 from app.download import baixar
 from app.busca import diaria
+from app.desempenho import coletor
 from app.painel import api_busca, api_chaves, api_perfis, api_postagem, api_templates, fila
 from app.postagem import agendador
 
@@ -98,6 +99,7 @@ def criar_app() -> FastAPI:
     trabalhador = fila.Trabalhador()
     publicador = agendador.Publicador()
     buscador = diaria.Buscador()
+    leitor_de_numeros = coletor.Coletor()
 
     @asynccontextmanager
     async def ciclo_de_vida(_app):
@@ -108,11 +110,13 @@ def criar_app() -> FastAPI:
             if not painel_de_teste():
                 publicador.start()
                 buscador.start()
+                leitor_de_numeros.start()
             avisos.avisar("✅ Painel Canal Dark ligado.", chave="painel-ligado")
         yield
         trabalhador.parar()
         publicador.parar()
         buscador.parar()
+        leitor_de_numeros.parar()
 
     app = FastAPI(title="Canal Dark", docs_url=None, redoc_url=None, lifespan=ciclo_de_vida)
     app.mount("/estatico", _EstaticoSempreAtual(directory=PASTA / "estatico"), name="estatico")

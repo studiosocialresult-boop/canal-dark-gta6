@@ -279,5 +279,120 @@ class TesteNumerosMeta(unittest.TestCase):
         self.assertTrue(c.exception.reconectar)
 
 
+class TesteColetor(unittest.TestCase):
+    def setUp(self):
+        from app.desempenho import coletor
+        self.coletor = coletor
+        limpar()
+        self.conta = criar_conta()
+        for alvo in (mock.patch.object(coletor.contas, "credenciais_da_conta", return_value=Credenciais({})),
+                     mock.patch.object(coletor.avisos, "avisar")):
+            self.avisar = alvo.start()
+            self.addCleanup(alvo.stop)
+
+    def rodar(self, numeros_por_id: dict, rede: str = "youtube"):
+        leitor = mock.Mock(return_value=numeros_por_id)
+        with mock.patch.dict(self.coletor.LEITORES, {rede: leitor}):
+            return self.coletor.rodar(), leitor
+
+    def rodar_com_erro(self, erro: Exception):
+        with mock.patch.dict(self.coletor.LEITORES, {"youtube": mock.Mock(side_effect=erro)}):
+            return self.coletor.rodar()
+
+    def test_grava_atual_e_foto_de_24h_que_nao_muda_depois(self):
+        p = publicar(self.conta, 25, id_externo="v1")
+        self.rodar({"v1": Numeros(1000, 50, 3)})
+        self.rodar({"v1": Numeros(1500, 60, 4)})
+        self.assertEqual(leituras_de(p), {"atual": Numeros(1500, 60, 4), "24h": Numeros(1000, 50, 3)})
+
+    def test_post_novo_so_tem_atual(self):
+        p = publicar(self.conta, 2, id_externo="v1")
+        resultado, leitor = self.rodar({"v1": Numeros(10, 1, 0)})
+        self.assertEqual(set(leituras_de(p)), {"atual"})
+        self.assertEqual(resultado["lidas"], 1)
+        self.assertEqual(leitor.call_args.args[1], ["v1"])
+
+    def test_foto_atrasada_nao_e_gravada(self):                 # painel ficou desligado: 50 h de vida
+        p = publicar(self.conta, 50, id_externo="v1")
+        self.rodar({"v1": Numeros(900, 9, 9)})
+        self.assertEqual(set(leituras_de(p)), {"atual"})
+
+    def test_fotos_de_3_e_7_dias(self):
+        a, b = publicar(self.conta, 73, id_externo="v1"), publicar(self.conta, 169, id_externo="v2")
+        self.rodar({"v1": Numeros(5, 5, 5), "v2": Numeros(7, 7, 7)})
+        self.assertEqual(set(leituras_de(a)), {"atual", "3d"})
+        self.assertEqual(set(leituras_de(b)), {"atual", "7d"})
+
+    def test_post_com_mais_de_7_dias_nao_e_lido(self):
+        publicar(self.conta, 200, id_externo="velho")
+        _, leitor = self.rodar({})
+        leitor.assert_not_called()
+
+    def test_post_que_sumiu_vira_removido(self):
+        p = publicar(self.conta, 5, id_externo="v1")
+        self.rodar({"v1": Numeros(10, 1, 0)})
+        resultado, _ = self.rodar({})
+        self.assertEqual(resultado["removidas"], 1)
+        self.assertIsNotNone(contas.ler_publicacao(p)["removida_em"])
+        self.assertEqual(leituras_de(p), {"atual": Numeros(10, 1, 0)})       # o historico fica
+        _, leitor = self.rodar({})
+        leitor.assert_not_called()                                           # nao e mais lido
+
+    def test_falha_temporaria_nao_mexe_em_nada(self):
+        p = publicar(self.conta, 5, id_externo="v1")
+        agendada = agendar_post(self.conta)
+        antes = contas.ler_publicacao(agendada)
+        resultado = self.rodar_com_erro(ErroPostagem("fora do ar", temporario=True))
+        self.assertEqual(resultado["falhas"], 1)
+        self.assertIsNone(contas.ler_publicacao(p)["removida_em"])
+        self.assertEqual(leituras_de(p), {})
+        self.assertEqual(contas.ler_publicacao(agendada), antes)
+        self.assertEqual(contas.ler_conta(self.conta)["estado"], "conectada")
+
+    def test_erro_de_permissao_nao_expira_a_conta(self):
+        publicar(self.conta, 5, id_externo="v1")
+        self.rodar_com_erro(ErroPostagem("sem permissao"))
+        self.assertEqual(contas.ler_conta(self.conta)["estado"], "conectada")
+        self.avisar.assert_not_called()
+
+    def test_erro_inesperado_nao_derruba_a_rodada(self):
+        insta = criar_conta("instagram", "Insta")
+        publicar(self.conta, 5, id_externo="v1")
+        publicar(insta, 5, id_externo="m1")
+        leitores = {"youtube": mock.Mock(side_effect=ValueError("quebrou")),
+                    "instagram": mock.Mock(return_value={"m1": Numeros(1, 1, 1)})}
+        with mock.patch.dict(self.coletor.LEITORES, leitores):
+            resultado = self.coletor.rodar()
+        self.assertEqual((resultado["falhas"], resultado["lidas"]), (1, 1))
+
+    def test_acesso_vencido_marca_a_conta_e_avisa(self):
+        publicar(self.conta, 5, id_externo="v1")
+        self.rodar_com_erro(ErroPostagem("venceu", reconectar=True))
+        self.assertEqual(contas.ler_conta(self.conta)["estado"], "expirada")
+        self.assertEqual(self.avisar.call_args.kwargs["chave"], f"reconectar:{self.conta}")
+
+    def test_token_renovado_e_guardado(self):
+        publicar(self.conta, 5, id_externo="v1")
+        credenciais = Credenciais({})
+
+        def leitor(cred, ids):
+            cred.atualizar(access_token="NOVO")
+            return {"v1": Numeros(1, 1, 1)}
+        with mock.patch.object(self.coletor.contas, "credenciais_da_conta", return_value=credenciais), \
+                mock.patch.object(self.coletor.contas, "regravar_credenciais") as regravar, \
+                mock.patch.dict(self.coletor.LEITORES, {"youtube": leitor}):
+            self.coletor.rodar()
+        regravar.assert_called_once_with(self.conta, credenciais)
+
+    def test_rede_sem_leitor_e_pulada(self):
+        tiktok = criar_conta("tiktok", "TT")
+        publicar(tiktok, 5, id_externo="t1")
+        self.assertEqual(self.coletor.rodar()["falhas"], 0)
+
+    def test_duas_rodadas_ao_mesmo_tempo(self):
+        with self.coletor._trava:
+            self.assertTrue(self.coletor.rodar()["ocupado"])
+
+
 if __name__ == "__main__":
     unittest.main()
