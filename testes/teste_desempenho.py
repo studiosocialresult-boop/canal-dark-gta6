@@ -1,0 +1,618 @@
+"""Testes da Fase 8 (Desempenho). Nao usam internet nem gastam credito de API.
+
+Rodar:
+    .venv\\Scripts\\python.exe -m unittest testes.teste_desempenho -v
+"""
+import itertools
+import os
+import sqlite3
+import tempfile
+import unittest
+from contextlib import closing
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from types import SimpleNamespace
+from unittest import mock
+
+# Pasta de dados temporaria, para nunca mexer no banco de verdade (se teste_base ja rodou, usa a dele).
+if "CANAL_PASTA_DADOS" not in os.environ:
+    _PASTA = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    os.environ["CANAL_PASTA_DADOS"] = _PASTA.name
+if "CANAL_CHAVE_SECRETA" not in os.environ:
+    from cryptography.fernet import Fernet
+    os.environ["CANAL_CHAVE_SECRETA"] = Fernet.generate_key().decode()
+
+from app import banco, config  # noqa: E402
+from app.contratos import CorteProposto  # noqa: E402
+from app.desempenho import relatorio, repositorio  # noqa: E402
+from app.postagem import agendador, contas  # noqa: E402
+from app.postagem.redes import Credenciais, ErroPostagem, Numeros  # noqa: E402
+
+_contador = itertools.count(1)
+SEMPRE = ("2000-01-01 00:00:00", "2100-01-01 00:00:00")
+
+
+def limpar() -> None:
+    banco.criar_tabelas()
+    with closing(sqlite3.connect(config.ARQUIVO_BANCO)) as c, c:
+        c.execute("DELETE FROM leituras")
+        c.execute("DELETE FROM publicacoes")
+        c.execute("DELETE FROM contas")
+        c.execute("DELETE FROM narracoes")
+        c.execute("DELETE FROM cortes WHERE video_id IN (SELECT id FROM videos WHERE id_externo LIKE 'desemp%')")
+        c.execute("DELETE FROM videos WHERE id_externo LIKE 'desemp%'")
+
+
+def agora_texto() -> str:
+    return agendador.texto(agendador.agora())
+
+
+def criar_conta(rede: str = "youtube", nome: str = "Canal") -> int:
+    return contas.salvar_conta(1, rede, f"conta{next(_contador)}", nome, None, {"access_token": "A"}, 4)
+
+
+def criar_corte(modo: str = "narrado", nota: int = 80, canal: str = "Canal X") -> int:
+    n = next(_contador)
+    video = banco.registrar_video(1, "youtube", f"desemp{n:05d}", f"https://www.youtube.com/watch?v=desemp{n:05d}")
+    banco.atualizar_video(video, titulo=f"Video {n}", canal=canal)
+    corte = banco.registrar_corte(1, video, CorteProposto(0, 3, 0.0, 30.0, nota, "Motivo.", f"Corte {n}", modo))
+    banco.atualizar_corte(corte, estado="aprovado")
+    return corte
+
+
+def publicar(conta_id: int, horas_atras: float, corte_id: int | None = None, origem: str = "corte",
+             id_externo: str | None = None) -> int:
+    n = next(_contador)
+    quando = agendador.texto(agendador.agora() - timedelta(hours=horas_atras))
+    p = contas.criar_publicacao(1, conta_id, origem=origem, corte_id=corte_id, saida_id=None, arquivo="x.mp4",
+                                chave_video=f"teste:{n}", titulo=f"Post {n}", legenda="", opcoes={},
+                                agendada_para=quando)
+    contas.atualizar_publicacao(p, estado="publicada", id_externo=id_externo or f"ext{n}",
+                                url=f"https://exemplo/{n}", publicado_em=quando)
+    return p
+
+
+def agendar_post(conta_id: int) -> int:
+    n = next(_contador)
+    return contas.criar_publicacao(1, conta_id, origem="corte", corte_id=None, saida_id=None, arquivo="x.mp4",
+                                   chave_video=f"teste:{n}", titulo=f"Agendado {n}", legenda="", opcoes={},
+                                   agendada_para=agendador.texto(agendador.agora() + timedelta(hours=5)))
+
+
+def leituras_de(publicacao_id: int) -> dict:
+    linha = next(l for l in repositorio.linhas_do_relatorio(1, *SEMPRE) if l["id"] == publicacao_id)
+    return linha["leituras"]
+
+
+def resposta_http(status: int, dados: dict):
+    return SimpleNamespace(status_code=status, json=lambda: dados, headers={})
+
+
+class TesteRepositorio(unittest.TestCase):
+    def setUp(self):
+        limpar()
+        self.conta = criar_conta()
+
+    def test_grava_e_regrava_a_mesma_leitura(self):
+        p = publicar(self.conta, 2)
+        repositorio.gravar_leitura(1, p, "atual", Numeros(100, 5, 1), "2026-11-14 10:00:00")
+        repositorio.gravar_leitura(1, p, "atual", Numeros(150, 6, None), "2026-11-14 11:00:00")
+        self.assertEqual(leituras_de(p), {"atual": Numeros(150, 6, None)})
+
+    def test_marco_desconhecido_e_recusado(self):
+        with self.assertRaises(ValueError):
+            repositorio.gravar_leitura(1, publicar(self.conta, 2), "2d", Numeros(), "2026-11-14 10:00:00")
+
+    def test_marcos_gravados(self):
+        p, q = publicar(self.conta, 2), publicar(self.conta, 2)
+        repositorio.gravar_leitura(1, p, "atual", Numeros(1, 1, 1), "2026-11-14 10:00:00")
+        repositorio.gravar_leitura(1, p, "24h", Numeros(1, 1, 1), "2026-11-14 10:00:00")
+        self.assertEqual(repositorio.marcos_gravados([p, q]), {p: {"atual", "24h"}, q: set()})
+
+    def test_para_ler_so_traz_publicadas_recentes_e_nao_removidas(self):
+        recente, _velha, removida = publicar(self.conta, 5), publicar(self.conta, 200), publicar(self.conta, 5)
+        agendar_post(self.conta)                          # fica 'agendada': nao entra
+        repositorio.marcar_removida(removida, agora_texto())
+        lidas = repositorio.publicacoes_para_ler(agora_texto(), 170)
+        self.assertEqual([p["id"] for p in lidas], [recente])
+        self.assertEqual(set(lidas[0]), {"id", "usuario_id", "conta_id", "rede", "id_externo", "publicado_em"})
+
+    def test_conta_vencida_fica_fora_da_leitura(self):
+        publicar(self.conta, 5)
+        contas.atualizar_conta(self.conta, estado="expirada")
+        self.assertEqual(repositorio.publicacoes_para_ler(agora_texto(), 170), [])
+
+    def test_linha_do_relatorio_traz_corte_e_fonte(self):
+        corte = criar_corte(modo="original", nota=72, canal="Canal Y")
+        publicar(self.conta, 5, corte_id=corte)
+        linha = repositorio.linhas_do_relatorio(1, *SEMPRE)[0]
+        self.assertEqual((linha["modo"], linha["nota"], linha["fonte"], linha["rede"], linha["conta_nome"]),
+                         ("original", 72, "Canal Y", "youtube", "Canal"))
+
+    def test_linha_sem_corte_tem_campos_vazios(self):
+        publicar(self.conta, 5, origem="template")
+        linha = repositorio.linhas_do_relatorio(1, *SEMPRE)[0]
+        self.assertEqual((linha["modo"], linha["nota"], linha["fonte"], linha["origem"]), (None, None, None, "template"))
+
+    def test_relatorio_respeita_o_intervalo_e_a_conta(self):
+        outra = criar_conta(nome="Outra")
+        publicar(self.conta, 5); publicar(outra, 5); publicar(self.conta, 300)
+        desde = agendador.texto(agendador.agora() - timedelta(days=7))
+        self.assertEqual(len(repositorio.linhas_do_relatorio(1, desde, agora_texto())), 2)
+        self.assertEqual(len(repositorio.linhas_do_relatorio(1, desde, agora_texto(), conta_id=outra)), 1)
+
+    def test_visualizacoes_por_corte_soma_os_posts(self):
+        corte = criar_corte()
+        outra = criar_conta("instagram", "Insta")
+        a, b = publicar(self.conta, 5, corte_id=corte), publicar(outra, 5, corte_id=corte)
+        repositorio.gravar_leitura(1, a, "atual", Numeros(1000, 1, 1), "2026-11-14 10:00:00")
+        repositorio.gravar_leitura(1, b, "atual", Numeros(None, 9, 2), "2026-11-14 10:00:00")
+        self.assertEqual(repositorio.visualizacoes_por_corte(1), {corte: 1000})
+
+    def test_banco_antigo_ganha_a_coluna(self):
+        banco.criar_tabelas()
+        banco.criar_tabelas()                         # roda duas vezes sem erro
+        with closing(banco.conectar()) as c:
+            self.assertIn("removida_em", [l["name"] for l in c.execute("PRAGMA table_info(publicacoes)")])
+
+
+class TesteNumerosYoutube(unittest.TestCase):
+    def setUp(self):
+        from app.postagem import youtube
+        self.yt = youtube
+        renovar = mock.patch.object(youtube, "_renovar", return_value="TOKEN")
+        renovar.start()
+        self.addCleanup(renovar.stop)
+        self.cred = Credenciais({"access_token": "A", "refresh_token": "R"})
+
+    def test_le_numeros_e_deixa_vazio_o_que_a_rede_esconde(self):
+        resposta = resposta_http(200, {"items": [
+            {"id": "aaa", "statistics": {"viewCount": "1200", "likeCount": "80", "commentCount": "7"}},
+            {"id": "bbb", "statistics": {"viewCount": "15"}}]})
+        with mock.patch.object(self.yt, "chamar", return_value=resposta) as chamar:
+            numeros = self.yt.ler_numeros(self.cred, ["aaa", "bbb", "sumiu"])
+        self.assertEqual(numeros, {"aaa": Numeros(1200, 80, 7), "bbb": Numeros(15, None, None)})
+        self.assertEqual(chamar.call_args.kwargs["params"], {"part": "statistics", "id": "aaa,bbb,sumiu"})
+        self.assertEqual(chamar.call_args.kwargs["headers"], {"Authorization": "Bearer TOKEN"})
+
+    def test_lotes_de_50(self):
+        with mock.patch.object(self.yt, "chamar", return_value=resposta_http(200, {"items": []})) as chamar:
+            self.yt.ler_numeros(self.cred, [f"v{i}" for i in range(120)])
+        self.assertEqual(chamar.call_count, 3)
+
+    def test_lista_vazia_nao_chama_a_rede(self):
+        with mock.patch.object(self.yt, "chamar") as chamar:
+            self.assertEqual(self.yt.ler_numeros(self.cred, []), {})
+        chamar.assert_not_called()
+
+    def test_403_nao_pede_reconexao(self):
+        erro = {"error": {"message": "sem permissao", "errors": [{"reason": "insufficientPermissions"}]}}
+        with mock.patch.object(self.yt, "chamar", return_value=resposta_http(403, erro)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.yt.ler_numeros(self.cred, ["aaa"])
+        self.assertFalse(c.exception.reconectar)
+        self.assertFalse(c.exception.temporario)
+
+    def test_cota_estourada_e_temporaria(self):
+        erro = {"error": {"message": "cota", "errors": [{"reason": "quotaExceeded"}]}}
+        with mock.patch.object(self.yt, "chamar", return_value=resposta_http(403, erro)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.yt.ler_numeros(self.cred, ["aaa"])
+        self.assertTrue(c.exception.temporario)
+
+
+def erro_meta(codigo: int, subcodigo: int | None = None, status: int = 400):
+    erro = {"code": codigo, "message": "erro da meta"}
+    if subcodigo is not None:
+        erro["error_subcode"] = subcodigo
+    return resposta_http(status, {"error": erro})
+
+
+class TesteNumerosMeta(unittest.TestCase):
+    def setUp(self):
+        from app.postagem import meta
+        self.meta = meta
+        self.cred_ig = Credenciais({"page_token": "TOKEN", "ig_id": "IG"})
+        self.cred_fb = Credenciais({"page_token": "TOKEN", "page_id": "PG"})
+
+    def test_instagram_le_visualizacoes_curtidas_e_comentarios(self):
+        resposta = resposta_http(200, {
+            "m1": {"id": "m1", "like_count": 40, "comments_count": 3, "total_views_count": 900},
+            "m2": {"id": "m2", "comments_count": 0}})          # curtidas ocultas pelo dono
+        with mock.patch.object(self.meta, "chamar", return_value=resposta) as chamar:
+            numeros = self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"])
+        self.assertEqual(numeros, {"m1": Numeros(900, 40, 3), "m2": Numeros(None, None, 0)})
+        params = chamar.call_args.kwargs["params"]
+        self.assertEqual(params["ids"], "m1,m2")
+        self.assertEqual(params["access_token"], "TOKEN")
+
+    def test_facebook_le_curtidas_e_comentarios(self):
+        resposta = resposta_http(200, {
+            "v1": {"id": "v1", "likes": {"data": [], "summary": {"total_count": 12}},
+                   "comments": {"data": [], "summary": {"total_count": 2}}}})
+        with mock.patch.object(self.meta, "chamar", return_value=resposta):
+            self.assertEqual(self.meta.ler_numeros_facebook(self.cred_fb, ["v1"]), {"v1": Numeros(None, 12, 2)})
+
+    def test_lista_vazia_nao_chama_a_rede(self):
+        with mock.patch.object(self.meta, "chamar") as chamar:
+            self.assertEqual(self.meta.ler_numeros_instagram(self.cred_ig, []), {})
+        chamar.assert_not_called()
+
+    def test_post_apagado_fica_fora_do_resultado(self):
+        # o lote falha por causa do post apagado; um por um, so ele volta "nao existe"
+        def chamar(metodo, url, **kwargs):
+            if "ids" in kwargs["params"]:
+                return erro_meta(100, 33)
+            if url.endswith("/m2"):
+                return erro_meta(100, 33)
+            return resposta_http(200, {"id": "m1", "like_count": 5, "comments_count": 1})
+        with mock.patch.object(self.meta, "chamar", side_effect=chamar):
+            self.assertEqual(self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"]), {"m1": Numeros(None, 5, 1)})
+
+    def test_lote_recusado_com_outro_codigo_cai_para_um_por_um(self):
+        def chamar(metodo, url, **kwargs):
+            if "ids" in kwargs["params"]:
+                return erro_meta(803, None, 400)
+            if url.endswith("/m2"):
+                return erro_meta(100, 33)
+            return resposta_http(200, {"id": "m1", "like_count": 5, "comments_count": 1})
+        with mock.patch.object(self.meta, "chamar", side_effect=chamar):
+            self.assertEqual(self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"]), {"m1": Numeros(None, 5, 1)})
+
+    def test_nenhum_post_lido_nao_marca_todos_como_apagados(self):
+        with mock.patch.object(self.meta, "chamar", return_value=erro_meta(100, 33)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_instagram(self.cred_ig, ["m1", "m2"])
+        self.assertFalse(c.exception.reconectar)
+
+    def test_rede_fora_do_ar_levanta_erro_temporario(self):
+        with mock.patch.object(self.meta, "chamar", side_effect=ErroPostagem("fora", temporario=True)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_instagram(self.cred_ig, ["m1"])
+        self.assertTrue(c.exception.temporario)
+
+    def test_limite_de_uso_e_temporario(self):
+        with mock.patch.object(self.meta, "chamar", return_value=erro_meta(80001)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_facebook(self.cred_fb, ["v1"])
+        self.assertTrue(c.exception.temporario)
+
+    def test_erro_de_permissao_nao_pede_reconexao(self):
+        with mock.patch.object(self.meta, "chamar", return_value=erro_meta(10, status=403)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_facebook(self.cred_fb, ["v1"])
+        self.assertFalse(c.exception.reconectar)
+
+    def test_token_vencido_pede_reconexao(self):
+        with mock.patch.object(self.meta, "chamar", return_value=erro_meta(190, 463)):
+            with self.assertRaises(ErroPostagem) as c:
+                self.meta.ler_numeros_instagram(self.cred_ig, ["m1"])
+        self.assertTrue(c.exception.reconectar)
+
+
+class TesteColetor(unittest.TestCase):
+    def setUp(self):
+        from app.desempenho import coletor
+        self.coletor = coletor
+        limpar()
+        self.conta = criar_conta()
+        for alvo in (mock.patch.object(coletor.contas, "credenciais_da_conta", return_value=Credenciais({})),
+                     mock.patch.object(coletor.avisos, "avisar")):
+            self.avisar = alvo.start()
+            self.addCleanup(alvo.stop)
+
+    def rodar(self, numeros_por_id: dict, rede: str = "youtube"):
+        leitor = mock.Mock(return_value=numeros_por_id)
+        with mock.patch.dict(self.coletor.LEITORES, {rede: leitor}):
+            return self.coletor.rodar(), leitor
+
+    def rodar_com_erro(self, erro: Exception):
+        with mock.patch.dict(self.coletor.LEITORES, {"youtube": mock.Mock(side_effect=erro)}):
+            return self.coletor.rodar()
+
+    def test_grava_atual_e_foto_de_24h_que_nao_muda_depois(self):
+        p = publicar(self.conta, 25, id_externo="v1")
+        self.rodar({"v1": Numeros(1000, 50, 3)})
+        self.rodar({"v1": Numeros(1500, 60, 4)})
+        self.assertEqual(leituras_de(p), {"atual": Numeros(1500, 60, 4), "24h": Numeros(1000, 50, 3)})
+
+    def test_post_novo_so_tem_atual(self):
+        p = publicar(self.conta, 2, id_externo="v1")
+        resultado, leitor = self.rodar({"v1": Numeros(10, 1, 0)})
+        self.assertEqual(set(leituras_de(p)), {"atual"})
+        self.assertEqual(resultado["lidas"], 1)
+        self.assertEqual(leitor.call_args.args[1], ["v1"])
+
+    def test_foto_atrasada_nao_e_gravada(self):                 # painel ficou desligado: 50 h de vida
+        p = publicar(self.conta, 50, id_externo="v1")
+        self.rodar({"v1": Numeros(900, 9, 9)})
+        self.assertEqual(set(leituras_de(p)), {"atual"})
+
+    def test_fotos_de_3_e_7_dias(self):
+        a, b = publicar(self.conta, 73, id_externo="v1"), publicar(self.conta, 169, id_externo="v2")
+        self.rodar({"v1": Numeros(5, 5, 5), "v2": Numeros(7, 7, 7)})
+        self.assertEqual(set(leituras_de(a)), {"atual", "3d"})
+        self.assertEqual(set(leituras_de(b)), {"atual", "7d"})
+
+    def test_foto_de_7_dias_tem_6_horas_de_tolerancia(self):
+        p = publicar(self.conta, 173, id_externo="v1")
+        self.rodar({"v1": Numeros(7, 7, 7)})
+        self.assertEqual(set(leituras_de(p)), {"atual", "7d"})
+
+    def test_erro_ao_gravar_nao_derruba_as_outras_contas(self):
+        outra = criar_conta("youtube", "Canal 2")
+        a, b = publicar(self.conta, 5, id_externo="v1"), publicar(outra, 5, id_externo="v2")
+        original = self.coletor.repositorio.gravar_leitura
+
+        def gravar(usuario, pub, marco, numeros, quando):
+            if pub == a:
+                raise sqlite3.OperationalError("database is locked")
+            return original(usuario, pub, marco, numeros, quando)
+        with mock.patch.object(self.coletor.repositorio, "gravar_leitura", side_effect=gravar):
+            resultado, _ = self.rodar({"v1": Numeros(1, 1, 1), "v2": Numeros(2, 2, 2)})
+        self.assertEqual(resultado["falhas"], 1)
+        self.assertEqual(set(leituras_de(b)), {"atual"})
+
+    def test_post_com_mais_de_7_dias_nao_e_lido(self):
+        publicar(self.conta, 200, id_externo="velho")
+        _, leitor = self.rodar({})
+        leitor.assert_not_called()
+
+    def test_post_que_sumiu_vira_removido(self):
+        p = publicar(self.conta, 5, id_externo="v1")
+        self.rodar({"v1": Numeros(10, 1, 0)})
+        resultado, _ = self.rodar({})
+        self.assertEqual(resultado["removidas"], 1)
+        self.assertIsNotNone(contas.ler_publicacao(p)["removida_em"])
+        self.assertEqual(leituras_de(p), {"atual": Numeros(10, 1, 0)})       # o historico fica
+        _, leitor = self.rodar({})
+        leitor.assert_not_called()                                           # nao e mais lido
+
+    def test_falha_temporaria_nao_mexe_em_nada(self):
+        p = publicar(self.conta, 5, id_externo="v1")
+        agendada = agendar_post(self.conta)
+        antes = contas.ler_publicacao(agendada)
+        resultado = self.rodar_com_erro(ErroPostagem("fora do ar", temporario=True))
+        self.assertEqual(resultado["falhas"], 1)
+        self.assertIsNone(contas.ler_publicacao(p)["removida_em"])
+        self.assertEqual(leituras_de(p), {})
+        self.assertEqual(contas.ler_publicacao(agendada), antes)
+        self.assertEqual(contas.ler_conta(self.conta)["estado"], "conectada")
+
+    def test_erro_de_permissao_nao_expira_a_conta(self):
+        publicar(self.conta, 5, id_externo="v1")
+        self.rodar_com_erro(ErroPostagem("sem permissao"))
+        self.assertEqual(contas.ler_conta(self.conta)["estado"], "conectada")
+        self.avisar.assert_not_called()
+
+    def test_erro_inesperado_nao_derruba_a_rodada(self):
+        insta = criar_conta("instagram", "Insta")
+        publicar(self.conta, 5, id_externo="v1")
+        publicar(insta, 5, id_externo="m1")
+        leitores = {"youtube": mock.Mock(side_effect=ValueError("quebrou")),
+                    "instagram": mock.Mock(return_value={"m1": Numeros(1, 1, 1)})}
+        with mock.patch.dict(self.coletor.LEITORES, leitores):
+            resultado = self.coletor.rodar()
+        self.assertEqual((resultado["falhas"], resultado["lidas"]), (1, 1))
+
+    def test_acesso_vencido_marca_a_conta_e_avisa(self):
+        publicar(self.conta, 5, id_externo="v1")
+        self.rodar_com_erro(ErroPostagem("venceu", reconectar=True))
+        self.assertEqual(contas.ler_conta(self.conta)["estado"], "expirada")
+        self.assertEqual(self.avisar.call_args.kwargs["chave"], f"reconectar:{self.conta}")
+
+    def test_token_renovado_e_guardado(self):
+        publicar(self.conta, 5, id_externo="v1")
+        credenciais = Credenciais({})
+
+        def leitor(cred, ids):
+            cred.atualizar(access_token="NOVO")
+            return {"v1": Numeros(1, 1, 1)}
+        with mock.patch.object(self.coletor.contas, "credenciais_da_conta", return_value=credenciais), \
+                mock.patch.object(self.coletor.contas, "regravar_credenciais") as regravar, \
+                mock.patch.dict(self.coletor.LEITORES, {"youtube": leitor}):
+            self.coletor.rodar()
+        regravar.assert_called_once_with(self.conta, credenciais)
+
+    def test_rede_sem_leitor_e_pulada(self):
+        tiktok = criar_conta("tiktok", "TT")
+        publicar(tiktok, 5, id_externo="t1")
+        self.assertEqual(self.coletor.rodar()["falhas"], 0)
+
+    def test_duas_rodadas_ao_mesmo_tempo(self):
+        with self.coletor._trava:
+            self.assertTrue(self.coletor.rodar()["ocupado"])
+
+
+class TesteRelatorio(unittest.TestCase):
+    def setUp(self):
+        limpar()
+        self.conta = criar_conta()
+
+    def post(self, horas_atras, *, v24=None, atual=None, n24=None, n_atual=None, conta=None,
+             modo=None, nota=None, canal=None) -> int:
+        corte = None
+        if modo or nota is not None or canal:
+            corte = criar_corte(modo or "narrado", 80 if nota is None else nota, canal or "Canal X")
+        p = publicar(conta or self.conta, horas_atras, corte_id=corte)
+        for marco, valor, pronto in (("24h", v24, n24), ("atual", atual, n_atual)):
+            numeros = pronto if pronto is not None else (Numeros(visualizacoes=valor) if valor is not None else None)
+            if numeros is not None:
+                repositorio.gravar_leitura(1, p, marco, numeros, agora_texto())
+        return p
+
+    def test_media_por_modo_e_poucos_dados(self):
+        for v in (100, 200, 300):
+            self.post(30, v24=v, atual=v, modo="narrado")
+        for v in (900, 950):
+            self.post(30, v24=v, atual=v, modo="original")
+        modo = {g["rotulo"]: g for g in relatorio.montar(1, 7, "visualizacoes")["grupos"]["modo"]}
+        self.assertEqual((modo["narrado"]["posts"], modo["narrado"]["media"]), (3, 200))
+        self.assertEqual((modo["original"]["posts"], modo["original"]["media"]), (2, None))
+
+    def test_totais_usam_a_leitura_atual(self):
+        self.post(30, v24=100, atual=400)
+        self.post(2, atual=50)
+        t = relatorio.montar(1, 7, "visualizacoes")["totais"]
+        self.assertEqual((t["visualizacoes"], t["posts"]), (450, 2))
+
+    def test_numero_vazio_nao_entra_na_media(self):          # curtidas ocultas em um dos quatro posts
+        for c in (10, 20, 30):
+            self.post(30, n24=Numeros(1, c, 0))
+        self.post(30, n24=Numeros(1, None, 0))
+        rede = relatorio.montar(1, 7, "curtidas")["grupos"]["rede"][0]
+        self.assertEqual((rede["posts"], rede["media"]), (3, 20))
+
+    def test_rede_sem_a_medida_e_avisada(self):
+        insta = criar_conta("instagram", "Insta")
+        self.post(30, conta=insta, n24=Numeros(None, 5, 1), n_atual=Numeros(None, 5, 1))
+        self.assertEqual(relatorio.montar(1, 7, "visualizacoes")["sem_medida"], ["instagram"])
+        self.assertEqual(relatorio.montar(1, 7, "curtidas")["sem_medida"], [])
+
+    def test_faixas_de_nota(self):
+        for nota in (85, 90, 80):
+            self.post(30, v24=1000, nota=nota)
+        for nota in (70, 79, 75):
+            self.post(30, v24=400, nota=nota)
+        notas = relatorio.montar(1, 7, "visualizacoes")["grupos"]["nota"]
+        self.assertEqual([(g["rotulo"], g["media"]) for g in notas],
+                         [("80 ou mais", 1000), ("70 a 79", 400), ("abaixo de 70", None)])
+
+    def test_variacao_contra_o_periodo_anterior(self):
+        for _ in range(3):
+            self.post(24 * 10, v24=1000)
+            self.post(30, v24=1320)
+        self.assertEqual(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"], 32.0)
+
+    def test_variacao_nao_depende_de_quantos_posts_ja_tem_foto(self):    # canal estavel, cobertura desigual
+        for _ in range(3):
+            self.post(30, v24=1000)                      # periodo atual: 3 posts com foto
+        for _ in range(9):
+            self.post(24 * 10, v24=1000)                 # periodo anterior: 9 posts com foto
+        self.post(2, atual=50)                           # post novo, ainda sem foto
+        self.assertEqual(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"], 0.0)
+
+    def test_variacao_com_poucas_fotos_fica_vazia(self):
+        self.post(30, v24=1000)
+        self.post(24 * 10, v24=500)
+        self.assertIsNone(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"])
+
+    def test_variacao_sem_base_fica_vazia(self):
+        self.post(30, v24=500)
+        self.assertIsNone(relatorio.montar(1, 7, "visualizacoes")["totais"]["variacao_pct"])
+
+    def test_melhores_e_piores_nao_repetem(self):
+        for v in range(1, 8):
+            self.post(30, v24=v * 100)                       # 7 posts
+        r = relatorio.montar(1, 7, "visualizacoes")
+        self.assertEqual([p["24h"] for p in r["melhores"]], [700, 600, 500, 400, 300])
+        self.assertEqual([p["24h"] for p in r["piores"]], [100, 200])
+
+    def test_melhor_horario_precisa_de_base(self):
+        self.post(30, v24=100)
+        self.assertIsNone(relatorio.montar(1, 7, "visualizacoes")["totais"]["melhor_horario"])
+
+    def test_filtro_por_conta(self):
+        outra = criar_conta("youtube", "Canal 2")
+        self.post(30, v24=100, atual=100)
+        self.post(30, v24=900, atual=900, conta=outra)
+        self.assertEqual(relatorio.montar(1, 7, "visualizacoes", conta_id=outra)["totais"]["visualizacoes"], 900)
+
+    def test_periodo_vazio(self):
+        r = relatorio.montar(1, 7, "visualizacoes")
+        self.assertEqual((r["totais"]["posts"], r["totais"]["visualizacoes"], r["melhores"], r["piores"]),
+                         (0, None, [], []))
+        self.assertEqual(len(r["grupos"]["hora"]), 24)
+
+    def test_pedido_invalido(self):
+        with self.assertRaises(ValueError):
+            relatorio.montar(1, 5, "visualizacoes")
+        with self.assertRaises(ValueError):
+            relatorio.montar(1, 7, "alcance")
+
+    def test_hora_local_e_melhor_horario(self):
+        fuso = ZoneInfo(config.FUSO)
+        dia = agendador.agora().astimezone(fuso).date() - timedelta(days=2)
+
+        def post_as(hora_local, valor):
+            p = self.post(30, v24=valor)
+            quando = datetime(dia.year, dia.month, dia.day, hora_local, 30, tzinfo=fuso)
+            contas.atualizar_publicacao(p, publicado_em=agendador.texto(quando))
+
+        for _ in range(4):
+            post_as(19, 1000)
+        for _ in range(3):
+            post_as(18, 100)
+        r = relatorio.montar(1, 7, "visualizacoes")
+        hora = {g["rotulo"]: g for g in r["grupos"]["hora"]}
+        self.assertEqual(hora["19"]["posts"], 4)
+        self.assertEqual(r["totais"]["melhor_horario"], {"inicio_h": 19, "fim_h": 21})
+
+
+class TesteTelaDesempenho(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+        from app.painel import servidor
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        limpar()
+
+    def test_pagina_e_menu(self):
+        resposta = self.cliente.get("/desempenho")
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Desempenho", resposta.text)
+        self.assertIn('href="/desempenho"', self.cliente.get("/cortes").text)
+
+    def test_api_sem_dados(self):
+        dados = self.cliente.get("/api/desempenho").json()
+        self.assertEqual((dados["dias"], dados["medida"], dados["totais"]["posts"]), (7, "visualizacoes", 0))
+
+    def test_api_com_filtros(self):
+        dados = self.cliente.get("/api/desempenho?dias=30&medida=curtidas").json()
+        self.assertEqual((dados["dias"], dados["medida"]), (30, "curtidas"))
+
+    def test_pedido_invalido_da_400(self):
+        for consulta in ("dias=5", "medida=alcance", "dias=abc", "conta_id=x"):
+            resposta = self.cliente.get(f"/api/desempenho?{consulta}")
+            self.assertEqual(resposta.status_code, 400, consulta)
+            self.assertIn("erro", resposta.json())
+
+    def test_atualizar_agora(self):
+        with mock.patch("app.desempenho.coletor.rodar",
+                        return_value={"lidas": 3, "removidas": 0, "falhas": 0, "ocupado": False}):
+            self.assertEqual(self.cliente.post("/api/desempenho/atualizar").json()["lidas"], 3)
+
+
+class TesteCortesComNumeros(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+        from app.painel import servidor
+        os.environ["CANAL_SEM_TRABALHADOR"] = "1"
+        cls.cliente = TestClient(servidor.criar_app())
+
+    def setUp(self):
+        limpar()
+        self.conta = criar_conta()
+
+    def test_corte_mostra_a_soma_das_visualizacoes(self):
+        corte, sem_post = criar_corte(), criar_corte()
+        a, b = publicar(self.conta, 5, corte_id=corte), publicar(criar_conta("youtube", "Canal 2"), 5, corte_id=corte)
+        repositorio.gravar_leitura(1, a, "atual", Numeros(1000, 1, 1), "2026-11-14 10:00:00")
+        repositorio.gravar_leitura(1, b, "atual", Numeros(500, 1, 1), "2026-11-14 10:00:00")
+        cortes = {c["id"]: c for c in self.cliente.get("/api/cortes").json()["cortes"]}
+        self.assertEqual(cortes[corte]["visualizacoes"], 1500)
+        self.assertIsNone(cortes[sem_post]["visualizacoes"])
+
+    def test_consulta_o_repositorio_uma_vez_so(self):
+        criar_corte(), criar_corte()
+        with mock.patch("app.desempenho.repositorio.visualizacoes_por_corte", return_value={}) as chamada:
+            self.cliente.get("/api/cortes")
+        self.assertEqual(chamada.call_count, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

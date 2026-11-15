@@ -12,12 +12,14 @@ import os
 from pathlib import Path
 from urllib.parse import urlencode
 
-from app.postagem.redes import Credenciais, ErroPostagem, Resultado, chamar, json_ou_vazio, TEMPO_LIMITE_ENVIO
+from app.postagem.redes import Credenciais, ErroPostagem, Numeros, Resultado, chamar, json_ou_vazio, TEMPO_LIMITE_ENVIO
 
 URL_LOGIN = "https://accounts.google.com/o/oauth2/v2/auth"
 URL_TOKEN = "https://oauth2.googleapis.com/token"
 URL_CANAIS = "https://www.googleapis.com/youtube/v3/channels"
 URL_ENVIO = "https://www.googleapis.com/upload/youtube/v3/videos"
+URL_VIDEOS = "https://www.googleapis.com/youtube/v3/videos"
+LOTE_NUMEROS = 50                  # a API aceita ate 50 ids por consulta (1 unidade de cota cada)
 ESCOPOS = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly"]
 PEDACO = 8 * 1024 * 1024          # 8 MB: multiplo de 256 KB, como o protocolo exige
 TENTATIVAS_DE_RETOMADA = 5
@@ -121,6 +123,49 @@ def publicar(credenciais: Credenciais, arquivo: Path, titulo: str, legenda: str,
                 raise ErroPostagem("A sessão de envio do YouTube expirou. Vou começar de novo.", temporario=True)
             _explicar(resposta)
     raise ErroPostagem("O envio terminou sem resposta do YouTube.", temporario=True)
+
+
+# ---------- numeros (Fase 8) ----------
+
+def ler_numeros(credenciais: Credenciais, ids: list[str]) -> dict[str, Numeros]:
+    """Visualizacoes, curtidas e comentarios dos videos. Id que o YouTube nao devolve = video que nao existe mais.
+
+    Erro de permissao aqui NAO pede para reconectar a conta (isso seguraria os posts agendados dela):
+    so o token que nao renova pede (isso ja vem de _renovar).
+    """
+    if not ids:
+        return {}
+    token = _renovar(credenciais)
+    numeros: dict[str, Numeros] = {}
+    for inicio in range(0, len(ids), LOTE_NUMEROS):
+        lote = ids[inicio:inicio + LOTE_NUMEROS]
+        resposta = chamar("GET", URL_VIDEOS, rede="youtube", params={"part": "statistics", "id": ",".join(lote)},
+                          headers={"Authorization": f"Bearer {token}"})
+        dados = json_ou_vazio(resposta)
+        if resposta.status_code != 200 or not isinstance(dados.get("items"), list):
+            _explicar_leitura(resposta, dados)
+        for item in dados["items"]:
+            estatisticas = item.get("statistics") or {}
+            numeros[item["id"]] = Numeros(_inteiro(estatisticas.get("viewCount")),
+                                          _inteiro(estatisticas.get("likeCount")),
+                                          _inteiro(estatisticas.get("commentCount")))
+    return numeros
+
+
+def _inteiro(valor) -> int | None:
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _explicar_leitura(resposta, dados: dict) -> None:
+    erro = dados.get("error", {}) if isinstance(dados.get("error"), dict) else {}
+    motivo = (erro.get("errors") or [{}])[0].get("reason", "")
+    if motivo in ("quotaExceeded", "rateLimitExceeded", "userRateLimitExceeded"):
+        raise ErroPostagem("O limite de consultas do YouTube acabou. Leio os números mais tarde.", temporario=True)
+    raise ErroPostagem(f"O YouTube não deixou ler os números ({resposta.status_code} {motivo}): "
+                       f"{str(erro.get('message', ''))[:200]}".strip())
 
 
 def _proximo_byte(resposta) -> int:

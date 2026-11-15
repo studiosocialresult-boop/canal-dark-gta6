@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from app import config
-from app.postagem.redes import Credenciais, ErroPostagem, Resultado, TEMPO_LIMITE_ENVIO, chamar, json_ou_vazio
+from app.postagem.redes import Credenciais, ErroPostagem, Numeros, Resultado, TEMPO_LIMITE_ENVIO, chamar, json_ou_vazio
 
 GRAPH = f"https://graph.facebook.com/{config.VERSAO_META}"
 RUPLOAD = "https://rupload.facebook.com"
@@ -264,3 +264,99 @@ def publicar_facebook(credenciais: Credenciais, arquivo: Path, titulo: str, lege
             break
         _dormir(INTERVALO_CONSULTA_S)
     return Resultado(id_externo=video_id, url=f"https://www.facebook.com/reel/{video_id}")
+
+
+# ---------- numeros (Fase 8) ----------
+# Conferido na documentacao da Graph API v27.0 em 14/11/2026 (detalhes no plano.md, Fase 8):
+# - Instagram: like_count, comments_count e total_views_count no proprio post pedem so instagram_basic e
+#   pages_read_engagement (o app ja tem). Curtidas ocultas pelo dono nao vem (fica vazio).
+# - Facebook: curtidas e comentarios pelos resumos das listas do video. Visualizacoes do Facebook ficam
+#   em video_insights, que pede read_insights e pages_manage_engagement (o app nao tem): ficam vazias.
+# - Varios posts numa chamada (?ids=...). A doc nao diz o que acontece quando um deles foi apagado: se o
+#   lote for recusado, le um por um.
+
+CAMPOS_NUMEROS_IG = "like_count,comments_count,total_views_count"
+CAMPOS_NUMEROS_FB = "likes.summary(true).limit(0),comments.summary(true).limit(0)"
+LOTE_META = 50
+CODIGOS_DE_ESPERA = (4, 17, 32, 341, 613, 80001, 80002)
+
+
+def ler_numeros_instagram(credenciais: Credenciais, ids: list[str]) -> dict[str, Numeros]:
+    """Visualizacoes, curtidas e comentarios dos Reels. Id ausente do resultado = post apagado."""
+    return _ler_numeros("instagram", credenciais, ids, CAMPOS_NUMEROS_IG, lambda o: Numeros(
+        _inteiro(o.get("total_views_count")), _inteiro(o.get("like_count")), _inteiro(o.get("comments_count"))))
+
+
+def ler_numeros_facebook(credenciais: Credenciais, ids: list[str]) -> dict[str, Numeros]:
+    """Curtidas e comentarios dos Reels da Pagina (visualizacoes vazias). Id ausente = post apagado."""
+    return _ler_numeros("facebook", credenciais, ids, CAMPOS_NUMEROS_FB, lambda o: Numeros(
+        None, _total(o.get("likes")), _total(o.get("comments"))))
+
+
+def _ler_numeros(rede: str, credenciais: Credenciais, ids: list[str], campos: str, converter) -> dict[str, Numeros]:
+    if not ids:
+        return {}
+    token = credenciais["page_token"]
+    numeros: dict[str, Numeros] = {}
+    talvez_apagados: list[str] = []
+    for inicio in range(0, len(ids), LOTE_META):
+        lote = ids[inicio:inicio + LOTE_META]
+        resposta = chamar("GET", f"{GRAPH}/", rede=rede, params={"ids": ",".join(lote), "fields": campos,
+                                                                 "access_token": token})
+        dados = json_ou_vazio(resposta)
+        if resposta.status_code == 200 and all(isinstance(dados.get(i), dict) for i in lote):
+            numeros.update({i: converter(dados[i]) for i in lote})
+            continue
+        if resposta.status_code == 200 or _vale_tentar_um_por_um(resposta, rede):
+            # o lote nao veio inteiro (provavelmente um post apagado): pergunta um por um
+            for post_id in lote:
+                um = chamar("GET", f"{GRAPH}/{post_id}", rede=rede, params={"fields": campos, "access_token": token})
+                if um.status_code == 200:
+                    numeros[post_id] = converter(json_ou_vazio(um))
+                elif _codigo(um) == (100, 33):
+                    talvez_apagados.append(post_id)
+                else:
+                    raise _erro_leitura(um, rede)
+            continue
+        raise _erro_leitura(resposta, rede)
+    if talvez_apagados and not numeros:
+        # "nao existe" tambem aparece quando falta permissao: sem nenhum post lido, nao da para saber
+        raise ErroPostagem(f"A Meta não devolveu nenhum post desta conta ({len(talvez_apagados)}). "
+                           "Leio de novo mais tarde.")
+    return numeros
+
+
+def _vale_tentar_um_por_um(resposta, rede: str) -> bool:
+    """Lote recusado: so desiste da conta inteira se o erro e de acesso vencido ou de espera."""
+    erro = _erro_leitura(resposta, rede)
+    return not (erro.reconectar or erro.temporario)
+
+
+def _codigo(resposta) -> tuple:
+    erro = json_ou_vazio(resposta).get("error") or {}
+    return (erro.get("code"), erro.get("error_subcode")) if isinstance(erro, dict) else (None, None)
+
+
+def _erro_leitura(resposta, rede: str) -> ErroPostagem:
+    """Erros ao LER numeros. Diferente da postagem: falta de permissao aqui nao pede para reconectar
+    (isso seguraria os posts agendados da conta); so o token vencido pede."""
+    erro = json_ou_vazio(resposta).get("error") or {}
+    erro = erro if isinstance(erro, dict) else {}
+    codigo = erro.get("code")
+    if codigo == 190 or resposta.status_code == 401:
+        return ErroPostagem("O acesso à Meta venceu ou foi retirado. Conecte a conta de novo.", reconectar=True)
+    if codigo in CODIGOS_DE_ESPERA or erro.get("is_transient"):
+        return ErroPostagem("A Meta pediu para esperar (limite de uso). Leio os números mais tarde.", temporario=True)
+    mensagem = str(erro.get("message") or resposta.status_code)[:200]
+    return ErroPostagem(f"A Meta não deixou ler os números ({rede}, código {codigo}): {mensagem}")
+
+
+def _inteiro(valor) -> int | None:
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _total(lista) -> int | None:
+    return _inteiro(((lista or {}).get("summary") or {}).get("total_count")) if isinstance(lista, dict) else None

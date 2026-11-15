@@ -280,6 +280,30 @@ Evitar `max`: custa muito e costuma pensar demais.
 - **Pronto quando:** roda 7 dias sem intervenção.
 - **Modelo:** Opus 5.5 para o deploy; **Fable 5.2** para a revisão final de segurança e do código inteiro.
 
+### Fase 8 — Desempenho (construída em 15/11/2026; falta conferir ao vivo na VPS)
+- O painel busca nas redes as visualizações, curtidas e comentários de cada post publicado e mostra o que está funcionando. Desenho completo em `docs/superpowers/specs/2026-11-14-desempenho-design.md`.
+- **Em camadas:** YouTube primeiro (a permissão atual já deixa ler tudo). Instagram entra com visualizações, curtidas e comentários (a Meta já entrega com as permissões atuais); Facebook entra com curtidas e comentários, e as visualizações dele dependem de duas permissões a mais na Meta. TikTok só depois da auditoria, para não mexer no app enquanto ele está em análise.
+- Leitura de hora em hora dos posts com menos de 7 dias. Guarda a leitura mais recente e uma "foto" com 24 horas, 3 dias e 7 dias, para comparar posts de idades diferentes de forma justa.
+- Tela nova **Desempenho** (totais do período, média por modo, nota, rede, fonte, tipo e horário, melhores e piores posts) e total de visualizações no cartão de cada corte na tela **Cortes**.
+- Não gasta créditos de IA. A leitura roda separada do publicador: falha na leitura nunca atrapalha um post.
+- **Fora desta fase:** a IA aprender com os números e o agendador escolher horário sozinho (ficam para depois, usando os dados guardados aqui).
+- **Pronto quando:** com posts reais, os números do YouTube aparecem na tela em até uma hora, a foto de 24 h é guardada no dia seguinte e o total aparece no cartão do corte.
+- **Modelo:** Opus 5.5 (high) para a leitura nas redes; Sonnet 5.5 (medium) para banco, relatório e tela.
+- **Conferido na documentação da Meta (Graph API v27.0, 14/11/2026):**
+  - Instagram: o próprio post traz `like_count`, `comments_count` e `total_views_count` (visualizações em todas as superfícies) com as permissões que o app **já tem** (`instagram_basic` + `pages_read_engagement`). Por isso o Instagram entra **com visualizações** já. Se o dono ocultar as curtidas, o número não vem (fica vazio). As "estatísticas" (insights) pediriam `instagram_manage_insights`: não usadas.
+  - Facebook: curtidas e comentários pelos resumos (`likes.summary(true)`, `comments.summary(true)`) do vídeo. Visualizações só em `video_insights`, que pede `read_insights` e `pages_manage_engagement` (o app não tem): ficam vazias até o dono acrescentar essas permissões.
+  - Vários posts numa chamada (`?ids=...`); cada id conta como uma chamada no limite de uso. A documentação não diz o que acontece quando um dos posts foi apagado: se o lote for recusado, o painel lê um por um.
+  - Códigos de erro: 190 = acesso vencido (pede reconectar); 4, 17, 32, 341, 613, 80001, 80002 = limite de uso (espera); 10 e 200–299 = permissão (na leitura, só registra; não pede reconectar).
+  - **Falta conferir ao vivo na VPS** (o teste local usa respostas simuladas): se `total_views_count` vem preenchido nos Reels e se os resumos de curtidas/comentários funcionam nos Reels do Facebook.
+
+- **Como ficou (15/11/2026):**
+  - Leitura nas redes (`app/postagem/youtube.py` e `meta.py`: `ler_numeros`), rotina de hora em hora separada do publicador (`app/desempenho/coletor.py`, que também roda sozinha: `python -m app.desempenho.coletor`), guarda no banco (`app/banco.py`: tabela `leituras` e coluna `removida_em`; `app/desempenho/repositorio.py`) e o cálculo da tela (`app/desempenho/relatorio.py`).
+  - Tela **Desempenho** (`app/painel/api_desempenho.py`, `paginas/desempenho.html`, `estatico/desempenho.js`) com período de 7/30/90 dias, medida, filtro por conta, botão "Atualizar agora", "O que está funcionando" e as listas de melhores e piores. O cartão do corte, na tela Cortes, mostra o total de visualizações.
+  - Grupo com menos de 3 posts mostra "poucos dados". Post apagado na rede é marcado como "removido" e para de ser lido. Conta com acesso vencido vira "reconectar" (como no publicador); qualquer outro erro só entra no log e a leitura tenta de novo na hora seguinte.
+  - 234 testes passam (37 + 13 + 5 + 2 novos desta fase).
+  - **Ficou de fora:** visualizações do Facebook (pedem as permissões `read_insights` e `pages_manage_engagement`) e o TikTok inteiro (depois da auditoria do app).
+  - **Pronto quando (conferir com o dono na VPS):** [ ] números do YouTube na tela em até uma hora; [ ] no dia seguinte, a coluna "24 h" preenchida; [ ] total no cartão do corte; [ ] Instagram traz visualizações e o Facebook traz curtidas nos Reels.
+
 ## 7. Contas e chaves necessárias
 
 | Para quê | O que criar | Quando |

@@ -20,7 +20,9 @@ from fastapi.templating import Jinja2Templates
 from app import avisos, banco, config
 from app.download import baixar
 from app.busca import diaria
-from app.painel import api_busca, api_chaves, api_perfis, api_postagem, api_templates, fila
+from app.desempenho import coletor
+from app.desempenho import repositorio as repositorio_desempenho
+from app.painel import api_busca, api_chaves, api_desempenho, api_perfis, api_postagem, api_templates, fila
 from app.postagem import agendador
 
 PASTA = Path(__file__).resolve().parent
@@ -43,6 +45,8 @@ MENU = [
      "descricao": "Ajuste rápido de um vídeo para o formato vertical."},
     {"id": "agenda", "nome": "Agenda", "icone": "calendario", "fase": 5, "pronto": True,
      "descricao": "O calendário do que está agendado em cada conta, rede por rede."},
+    {"id": "desempenho", "nome": "Desempenho", "icone": "grafico", "fase": 8, "pronto": True,
+     "descricao": "Quanto cada post rendeu e o que está funcionando."},
     {"id": "contas", "nome": "Contas", "icone": "plug", "fase": 5, "pronto": True,
      "descricao": "Conecte YouTube, Instagram, TikTok e Facebook para publicar daqui."},
 ]
@@ -98,6 +102,7 @@ def criar_app() -> FastAPI:
     trabalhador = fila.Trabalhador()
     publicador = agendador.Publicador()
     buscador = diaria.Buscador()
+    leitor_de_numeros = coletor.Coletor()
 
     @asynccontextmanager
     async def ciclo_de_vida(_app):
@@ -108,11 +113,13 @@ def criar_app() -> FastAPI:
             if not painel_de_teste():
                 publicador.start()
                 buscador.start()
+                leitor_de_numeros.start()
             avisos.avisar("✅ Painel Canal Dark ligado.", chave="painel-ligado")
         yield
         trabalhador.parar()
         publicador.parar()
         buscador.parar()
+        leitor_de_numeros.parar()
 
     app = FastAPI(title="Canal Dark", docs_url=None, redoc_url=None, lifespan=ciclo_de_vida)
     app.mount("/estatico", _EstaticoSempreAtual(directory=PASTA / "estatico"), name="estatico")
@@ -138,6 +145,7 @@ def criar_app() -> FastAPI:
     api_templates.registrar(app, paginas, contexto)
     api_perfis.registrar(app, paginas, contexto)
     api_postagem.registrar(app, paginas, contexto)
+    api_desempenho.registrar(app, paginas, contexto)
     api_busca.registrar(app, paginas, contexto)
     api_chaves.registrar(app)
 
@@ -152,7 +160,8 @@ def criar_app() -> FastAPI:
 
     @app.get("/api/cortes")
     def api_cortes():
-        return {"cortes": [_corte_json(l) for l in banco.listar_cortes(USUARIO)
+        visualizacoes = repositorio_desempenho.visualizacoes_por_corte(USUARIO)      # uma consulta so
+        return {"cortes": [_corte_json(l, visualizacoes.get(l["id"])) for l in banco.listar_cortes(USUARIO)
                            if l["estado"] in ESTADOS_REVISAVEIS],
                 "numeros": _numeros()}
 
@@ -289,7 +298,7 @@ def _corte_do_dono(corte_id: int):
     return corte
 
 
-def _corte_json(l) -> dict:
+def _corte_json(l, visualizacoes: int | None = None) -> dict:
     arquivo = l["caminho_arquivo"]
     return {
         "id": l["id"], "video_id": l["video_id"], "titulo": l["titulo"], "nota": l["nota"],
@@ -298,7 +307,7 @@ def _corte_json(l) -> dict:
         "canal": l["video_canal"] or "", "video_titulo": l["video_titulo"] or "",
         "video_url": l["video_url"], "plataforma": l["video_plataforma"],
         "narracao": l["narracao_estado"], "custo_usd": round(l["custo_usd"], 3),
-        "criado_em": l["criado_em"],
+        "criado_em": l["criado_em"], "visualizacoes": visualizacoes,
         "midia": f"/midia/{arquivo}" if arquivo else None,
         "miniatura": f"/miniatura/{l['id']}.jpg" if arquivo else None,
     }

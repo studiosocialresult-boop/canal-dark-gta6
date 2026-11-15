@@ -260,10 +260,25 @@ CREATE TABLE IF NOT EXISTS publicacoes (
     url TEXT,
     erro TEXT,
     criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-    publicado_em TEXT
+    publicado_em TEXT,
+    removida_em TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS publicacao_unica_por_conta
     ON publicacoes (conta_id, chave_video) WHERE estado != 'cancelada';
+
+-- Leituras dos numeros de um post nas redes (Fase 8). marco: 'atual' (regravada a cada rodada) ou a
+-- foto tirada quando o post completou aquela idade ('24h', '3d', '7d'). NULL = a rede nao informa.
+CREATE TABLE IF NOT EXISTS leituras (
+    id INTEGER PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    publicacao_id INTEGER NOT NULL REFERENCES publicacoes(id) ON DELETE CASCADE,
+    marco TEXT NOT NULL,
+    visualizacoes INTEGER,
+    curtidas INTEGER,
+    comentarios INTEGER,
+    lido_em TEXT NOT NULL,
+    UNIQUE (publicacao_id, marco)
+);
 
 -- Busca diaria (Fase 6): canais acompanhados, cada execucao da busca e o ranking que ela montou.
 CREATE TABLE IF NOT EXISTS canais_monitorados (
@@ -366,6 +381,9 @@ def _garantir_colunas(conexao) -> None:
     if "midia_id" not in colunas:
         conexao.execute("ALTER TABLE template_frases ADD COLUMN midia_id INTEGER "
                         "REFERENCES template_midias(id) ON DELETE CASCADE")
+    colunas = {l["name"] for l in conexao.execute("PRAGMA table_info(publicacoes)")}
+    if colunas and "removida_em" not in colunas:
+        conexao.execute("ALTER TABLE publicacoes ADD COLUMN removida_em TEXT")
 
 
 TRAVAS_ANTIGAS = {"fila": "CHECK (tipo", "templates": "CHECK (layout"}

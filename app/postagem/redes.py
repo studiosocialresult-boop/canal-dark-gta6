@@ -49,6 +49,14 @@ class Resultado:
 
 
 @dataclass
+class Numeros:
+    """Numeros de um post lidos na rede. None = a rede nao informa (diferente de zero)."""
+    visualizacoes: int | None = None
+    curtidas: int | None = None
+    comentarios: int | None = None
+
+
+@dataclass
 class Credenciais:
     """O que fica guardado (criptografado) para cada conta."""
     dados: dict = field(default_factory=dict)
