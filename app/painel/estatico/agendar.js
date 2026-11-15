@@ -51,8 +51,11 @@ const Agendar = (() => {
     }).join("");
     corpo.innerHTML = titulo + `
       <div class="secao"><h3>Contas</h3><div class="lista">${contasHtml}</div></div>
-      ${n > 1 ? `<label class="interruptor"><input type="checkbox" id="ag-distribuir" ${pedido.distribuir ? "checked" : ""}>Espalhar: cada vídeo vai para uma só conta</label>
-        <p class="dica" style="margin:-8px 0 0">Bom para variações de um mesmo corte: evita postar quase o mesmo vídeo várias vezes na mesma rede.</p>` : ""}
+      ${n > 1 ? `<div class="secao"><h3>Para onde vai cada vídeo</h3>
+        <div class="segmentado" id="ag-distribuir" style="justify-self:start">
+          <button type="button" data-valor="todas" class="${pedido.distribuir ? "" : "ativo"}">Cada vídeo em todas as contas marcadas</button>
+          <button type="button" data-valor="espalhar" class="${pedido.distribuir ? "ativo" : ""}">Um vídeo por conta (espalhar)</button></div>
+        <p class="dica" style="margin:0">“Espalhar” serve para variações de um mesmo corte: cada vídeo vai para uma conta só.</p></div>` : ""}
       <div class="secao"><h3>Quando</h3>
         <div class="segmentado" id="ag-quando" style="justify-self:start"><button type="button" class="ativo" data-valor="ritmo">Próximo horário livre de cada conta</button><button type="button" data-valor="hora">Escolher data e hora</button></div>
         <input class="campo" type="datetime-local" id="ag-hora" hidden style="max-width:260px"></div>
@@ -64,8 +67,27 @@ const Agendar = (() => {
         <label class="rotulo-campo">Hashtags (separadas por espaço, sem #)<input class="campo" id="ag-tags"></label>
         <p class="dica" id="ag-credito" style="margin:0"></p>` : `<p class="dica" style="margin:0">A IA escreve título, descrição e hashtags de cada vídeo (uma fração de centavo por vídeo). Você pode editar depois, na Agenda.</p>`}</div>
       <div class="secao" id="ag-tiktok" hidden></div>
+      <p class="resumo-agendar" id="ag-resumo"></p>
       <div class="erro-texto" id="ag-erro"></div>
       <div class="modal-acoes"><button class="botao" type="button" data-fechar>Cancelar</button><button class="botao primario" type="button" id="ag-confirmar">Agendar</button></div>`;
+    atualizarResumo();
+  }
+
+  const espalhar = () => !!corpo.querySelector('#ag-distribuir [data-valor="espalhar"].ativo');
+
+  /** Diz, antes de confirmar, quantas publicações vão ser criadas. */
+  function atualizarResumo() {
+    const caixa = corpo.querySelector("#ag-resumo");
+    if (!caixa) return;
+    const n = total(), contas = corpo.querySelectorAll("input[name=conta]:checked").length;
+    const v = n === 1 ? "1 vídeo" : `${n} vídeos`, c = contas === 1 ? "1 conta" : `${contas} contas`;
+    if (!contas) { caixa.textContent = "Marque as contas onde quer postar."; return; }
+    if (n > 1 && espalhar()) {
+      caixa.innerHTML = `${v} espalhados entre ${c}: <b>cada vídeo vai para uma conta só</b>.`;
+    } else {
+      const pubs = n * contas;
+      caixa.innerHTML = `${v} × ${c} = <b>${pubs} publicaç${pubs === 1 ? "ão" : "ões"}</b>${contas > 1 ? " (cada vídeo em todas as contas marcadas)" : ""}.`;
+    }
   }
 
   corpo.addEventListener("click", async (e) => {
@@ -75,10 +97,17 @@ const Agendar = (() => {
       corpo.querySelector("#ag-hora").hidden = botaoQuando.dataset.valor !== "hora";
       return;
     }
+    const botaoDistribuir = e.target.closest("#ag-distribuir button");
+    if (botaoDistribuir) {
+      corpo.querySelectorAll("#ag-distribuir button").forEach((b) => b.classList.toggle("ativo", b === botaoDistribuir));
+      atualizarResumo();
+      return;
+    }
     if (e.target.closest("#ag-sugerir")) return sugerir(e.target.closest("#ag-sugerir"));
     if (e.target.closest("#ag-confirmar")) return confirmar(e.target.closest("#ag-confirmar"));
   });
   corpo.addEventListener("change", (e) => {
+    if (e.target.name === "conta") atualizarResumo();
     if (e.target.name === "conta" && e.target.dataset.rede === "tiktok") atualizarTiktok();
   });
 
@@ -119,7 +148,8 @@ const Agendar = (() => {
     erroTexto.textContent = "";
     const contas = [...corpo.querySelectorAll("input[name=conta]:checked")].map((c) => Number(c.value));
     const corpoPedido = { cortes: pedido.cortes, saidas: pedido.saidas, contas,
-                          distribuir: !!corpo.querySelector("#ag-distribuir")?.checked };
+                          distribuir: total() > 1 && espalhar() };
+    if (!contas.length) { erroTexto.textContent = "Marque pelo menos uma conta."; return; }
     if (!corpo.querySelector("#ag-hora").hidden) {
       if (!corpo.querySelector("#ag-hora").value) { erroTexto.textContent = "Escolha a data e a hora."; return; }
       corpoPedido.horario = corpo.querySelector("#ag-hora").value;

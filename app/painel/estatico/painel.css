@@ -299,6 +299,7 @@ select.campo-select { padding: 8px 12px; border-radius: 11px; border: 1px solid 
 .video-aviso { position: absolute; left: 10px; right: 10px; bottom: 10px; text-align: center; font-size: 12px; color: #fff;
   background: rgba(0, 0, 0, .62); padding: 7px 10px; border-radius: 10px; }
 .video-aviso[hidden] { display: none; }
+.resumo-agendar { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--acento-fraco); font-size: 14px; }
 .grade-escolha { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; max-height: 52vh; overflow-y: auto; padding: 2px; }
 .grade-escolha button { padding: 4px; border-radius: 12px; background: none; cursor: pointer; border: 2px solid transparent; text-align: center; color: inherit; font: inherit; }
 .grade-escolha button.ativo { border-color: var(--acento); }

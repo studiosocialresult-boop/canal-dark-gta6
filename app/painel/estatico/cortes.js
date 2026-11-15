@@ -602,11 +602,15 @@
   }
   $("#massa-preparar").onclick = abrirPreparar;
   $("#massa-agendar").onclick = () => {
-    const escolhidos = [...estado.selecionados].map((id) => estado.cortes.find((c) => c.id === id)).filter(Boolean);
+    const todos = [...estado.selecionados].map((id) => estado.cortes.find((c) => c.id === id)).filter(Boolean);
+    const preparando = todos.filter((c) => c.preparando && !c.pronta);
+    if (preparando.length) aviso(`${preparando.length} corte(s) ainda estão sendo preparados e ficaram de fora. Agende quando aparecerem em “Prontos para agendar”.`);
+    const escolhidos = todos.filter((c) => !preparando.includes(c));
+    if (!escolhidos.length) return;
     const saidas = escolhidos.filter((c) => c.pronta && c.estado === "aprovado").map((c) => c.pronta.saida_id);   // já no template
     const cortes = escolhidos.filter((c) => !c.pronta && c.estado === "aprovado").map((c) => c.id);
     if (!saidas.length && !cortes.length) { aviso("Só cortes aprovados podem ser agendados. Aprove primeiro.", { tipo: "erro" }); return; }
-    const fora = escolhidos.length - saidas.length - cortes.length;
+    const fora = escolhidos.length - saidas.length - cortes.length;   // não aprovados
     if (fora) aviso(`${fora} corte(s) não aprovado(s) ficaram de fora.`);
     Agendar.abrir({ cortes, saidas });
   };
