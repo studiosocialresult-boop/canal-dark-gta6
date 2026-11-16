@@ -95,14 +95,15 @@ def _pedir_voz(texto: str, tentativas: int = 3, espera_s: float = 10.0) -> tuple
             if resposta.ok:
                 dados = resposta.json()
                 return base64.b64decode(dados["audio_base64"]), dados["alignment"]
+            if resposta.status_code in (401, 429) and "quota" in resposta.text.lower():
+                raise ErroVoz("Acabaram os caracteres do plano da ElevenLabs neste mes. "
+                              "Espere a renovacao ou mude de plano no site da ElevenLabs.")
             if resposta.status_code == 401:
                 raise ErroVoz("A chave da ElevenLabs foi recusada. Confira o arquivo .env.")
             if resposta.status_code == 402:
                 raise ErroVoz("A ElevenLabs recusou: esta voz ou este recurso exige plano pago.")
             if resposta.status_code in (400, 404, 422):
                 raise ErroVoz(f"A ElevenLabs rejeitou o pedido ({resposta.status_code}): {resposta.text[:200]}")
-            if resposta.status_code == 429 and "quota" in resposta.text.lower():
-                raise ErroVoz("Acabaram os caracteres do plano da ElevenLabs neste mes.")
             log.warning("Voz: erro %d da ElevenLabs (tentativa %d de %d).",
                         resposta.status_code, tentativa, tentativas)
         if tentativa < tentativas:
