@@ -24,7 +24,11 @@ from app.busca import perfil
 log = config.criar_log("busca")
 
 # Consultas em ingles e portugues. "semana" = enviados nesta semana, ordenados por visualizacoes.
-CONSULTAS = ["GTA 6", "GTA VI", "GTA 6 trailer", "GTA 6 gameplay", "GTA 6 notícias", "GTA 6 novidades"]
+# As CONSULTAS_HOJE primeiras tambem sao buscadas com o filtro "hoje" (no lancamento, o dia muda rapido).
+CONSULTAS = ["GTA 6", "GTA VI", "GTA 6 gameplay", "GTA 6 notícias", "GTA 6 novidades", "GTA 6 trailer",
+             # com o jogo lancado (19/11/2026), o assunto passa a ser o que se faz dentro dele
+             "GTA 6 dicas", "GTA 6 segredos", "GTA 6 detalhes", "GTA 6 easter eggs", "GTA 6 análise", "GTA 6 review"]
+CONSULTAS_HOJE = 3
 FILTRO_SEMANA = "CAMSBAgDEAE%253D"       # ordenar por visualizacoes + enviados esta semana + so videos
 FILTRO_HOJE = "CAMSBAgCEAE%253D"         # ordenar por visualizacoes + enviados hoje + so videos
 POR_CONSULTA = 15
@@ -32,6 +36,12 @@ MAX_COM_DATA = 60                        # a data de cada video e uma consulta; 
 DURACAO_MAX_S = 45 * 60                  # videos mais longos custam caro para baixar e transcrever
 DURACAO_MIN_S = 40
 TITULO_GTA = re.compile(r"(gta|grand theft auto)\s*(6|vi)\b", re.IGNORECASE)    # GTA 6 / GTA VI (nao o GTA V)
+# Titulos que anunciam o final ou as cenas da historia em sequencia. A Rockstar manda remover esse tipo
+# de video (politica oficial de material protegido), entao ele nem vai para a fila: economiza IA e evita
+# advertencia no canal.
+TITULO_SPOILER = re.compile(
+    r"\b(ending|final do jogo|final da hist[oó]ria|final explicado|all cutscenes|todas as cutscenes|"
+    r"game movie|filme completo)\b", re.IGNORECASE)
 MAX_TENTATIVAS_POR_DIA = 3
 ESPERA_ENTRE_TENTATIVAS = timedelta(minutes=30)
 
@@ -75,7 +85,7 @@ def _buscar_no_youtube(consulta: str, filtro: str) -> list[dict]:
 def coletar_busca() -> list[dict]:
     """Junta os resultados de todas as consultas, sem repetir, ja com a data de postagem."""
     unicos: dict[str, dict] = {}
-    pedidos = [(c, FILTRO_SEMANA) for c in CONSULTAS] + [(c, FILTRO_HOJE) for c in CONSULTAS[:2]]
+    pedidos = [(c, FILTRO_SEMANA) for c in CONSULTAS] + [(c, FILTRO_HOJE) for c in CONSULTAS[:CONSULTAS_HOJE]]
     for consulta, filtro in pedidos:
         for item in _buscar_no_youtube(consulta, filtro):
             if TITULO_GTA.search(item["titulo"]):
@@ -188,6 +198,8 @@ def _motivo_de_descarte(item: dict, usuario_id: int) -> tuple[str, str] | None:
     """(destino, motivo) se o video nao deve ser processado; None se pode."""
     if banco.buscar_video(usuario_id, "youtube", item["id_externo"]) is not None:
         return "ja_processado", "Já foi processado antes"
+    if TITULO_SPOILER.search(item.get("titulo") or ""):
+        return "ignorado", "O título indica spoiler da história"
     duracao = item.get("duracao_s")
     if duracao and duracao > DURACAO_MAX_S:
         return "ignorado", f"Longo demais ({int(duracao // 60)} min)"

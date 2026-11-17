@@ -133,6 +133,10 @@ O esforço é quanto o modelo "pensa" antes de agir. Mais esforço = mais cuidad
 | Fase 6 — Busca diária | Sonnet 5.5 | medium |
 | Fase 7 — Deploy na VPS | Opus 5.5 | high |
 | Fase 7 — Revisão final de segurança e do código | Fable 5.2 | xhigh |
+| Fase 9 — etapa 1: ajuste do prompt do cérebro para o lançamento | Fable 5.2 | high |
+| Fase 9 — etapa 2: escalação do dia (agendador) | Opus 5.5 | high |
+| Fase 9 — etapas 3 e 4: template no automático, vigia e freios | Sonnet 5.5 | medium |
+| Fase 9 — etapa 5: aprender com os números (prompt: Fable 5.2 high) | Sonnet 5.5 | medium |
 | Qualquer fase — bug que não saiu em duas tentativas | Opus 5.5 | xhigh |
 | Qualquer fase — ajuste pequeno (texto, cor, nome) | Sonnet 5.5 | low |
 
@@ -305,6 +309,42 @@ Evitar `max`: custa muito e costuma pensar demais.
   - 234 testes passam (37 + 13 + 5 + 2 novos desta fase).
   - **Ficou de fora:** visualizações do Facebook (pedem as permissões `read_insights` e `pages_manage_engagement`) e o TikTok inteiro (depois da auditoria do app).
   - **Pronto quando (conferir com o dono na VPS):** [ ] números do YouTube na tela em até uma hora; [ ] no dia seguinte, a coluna "24 h" preenchida; [ ] total no cartão do corte; [ ] Instagram traz visualizações e o Facebook traz curtidas nos Reels.
+
+### Fase 9 — Piloto automático (planejada em 16/11/2026; nada construído ainda)
+
+Objetivo: ligar a busca diária e o modo automático e deixar o canal rodando sem o dono abrir o painel. As duas chaves já existem (`busca_ativa` e `modo_automatico`, em Configurações), mas o estudo do código em 16/11/2026 achou cinco falhas que impedem deixar sozinho:
+
+| Falha | Onde | O que acontece |
+|---|---|---|
+| Fila sem fim | `rodar_modo_automatico` em `app/postagem/agendador.py` | Aprova todo corte com nota 80+ e marca nos próximos horários livres, até 90 dias à frente, por ordem de chegada. Com as contas na rampa (YouTube 2/dia, Instagram 1, Facebook 1), a notícia de hoje sairia semanas depois. |
+| Produz mais do que posta | `meta_cortes_dia` (15) em `app/busca/diaria.py` | Hoje cabem 2 cortes diferentes por dia nas contas. O resto gasta IA e voz à toa. |
+| Posta o corte cru | modo automático | Não passa pelo template e não confere se a narração ficou pronta. Se a voz falhar, sai um corte só com legenda, o padrão que as redes mais punem como cópia. |
+| Assunto repetido | `chave_video` é por corte | Dois vídeos sobre a mesma notícia viram dois cortes quase iguais na mesma conta. |
+| Ninguém vigiando | `app/avisos.py`, `app/ia.py` | O robô do Telegram não foi criado (falhas ficam em silêncio), não há teto de gasto por dia nem freio quando uma rede remove um post. |
+
+**Contexto:** o GTA 6 está marcado para 19/11/2026. O conteúdo muda de notícia e trailer para jogabilidade, e o volume de vídeos dispara.
+
+**Etapas, nesta ordem:**
+
+1. **Ajuste para o lançamento (pequena, antes de 19/11).** Novos termos em `CONSULTAS` na busca (jogabilidade, missões, dicas, segredos). Duas regras novas em `prompts/cerebro.md`: não escolher trecho que entrega o final da história (a Rockstar derruba vídeos de spoiler) e não abrir o corte com violência forte (o YouTube não monetiza violência gráfica nos primeiros 7 segundos). 
+   - **Feita em 16/11/2026** (falta salvar no git e publicar na VPS). Regras conferidas nas páginas oficiais: [política da Rockstar sobre material protegido](https://support.rockstargames.com/articles/7bNaeoMFTV0iUDGhStTXvz/policy-on-posting-copyrighted-rockstar-games-material) (atualizada em 10/01/2025) e [diretrizes de conteúdo adequado para anunciantes do YouTube](https://support.google.com/youtube/answer/6162278?hl=en).
+   - `prompts/cerebro.md` ganhou duas seções. **Trechos que nunca viram corte:** spoiler da história, cena da história sem comentário, programas de dentro do jogo (TV, rádio, comédia), imagens vazadas ou caixa aberta antes da data, trapaça no online. São as categorias que a Rockstar lista como motivo de remoção. **Abertura sem violência extrema:** violência gráfica nos primeiros 7 segundos fica sem anúncios no YouTube; tortura, massacre de pedestres e violência sexual ficam sem anúncios em qualquer ponto.
+   - `app/busca/diaria.py`: 12 consultas em vez de 6 (dicas, segredos, detalhes, easter eggs, análise, review), 3 delas também com o filtro "hoje"; título que anuncia o final ou todas as cenas da história (`TITULO_SPOILER`) aparece no ranking como "ignorado" e não vai para a fila. Busca real: 1 min 22 s, 14 vídeos no ranking.
+   - **Atenção (lido na política da Rockstar):** a tolerância dela vale para uso **não comercial** ("você não ganha dinheiro com as imagens"), e ela se reserva o direito de remover qualquer coisa. Canal monetizado não está coberto por essa permissão: o risco de direitos autorais da seção 1.2 continua, mesmo seguindo todas as regras acima.
+   - **Visto no ranking real, para decidir depois:** entram vídeos em vietnamita, russo e espanhol (o filtro só olha "GTA 6" no título). Vale um filtro de idioma (português e inglês) para não gastar transcrição e IA com eles.
+2. **Escalação do dia.** O modo automático deixa de aprovar tudo e passa a preencher só as vagas das próximas 24 horas com os melhores cortes disponíveis: maior nota, mais recente, sem assunto repetido na mesma conta nos últimos 7 dias, e corte de modo `narrado` só entra com a narração pronta. O melhor corte do dia vai para a vaga entre 19h e 22h. Corte de modo `original` é minoria (no máximo 1 em cada 3 por conta). Corte com mais de 3 dias sem vaga sai da fila do automático (configurável; continua na tela Cortes). O mesmo corte vai para as redes diferentes, com algumas horas entre uma e outra. A meta de produção da busca passa a ser o dobro das vagas do dia, em vez de 15 fixos. A definir na etapa: como reconhecer "mesmo assunto" (proposta: o Haiku compara o título do corte com os já postados ou agendados na conta).
+3. **Com a cara do canal.** Uma configuração escolhe o template padrão do automático; o corte passa por ele (`lote.preparar_corte`) antes de ser agendado. Sem template escolhido, o automático não agenda e avisa.
+4. **Vigia e freios.** Resumo diário no Telegram (o que saiu, o que sai nas próximas 24 horas, gasto do dia, problemas) com como cancelar um post pelo celular. Teto de gasto por dia com IA e voz: ao bater, a fila para e avisa. Pausa automática da conta, com aviso, quando um post é removido pela rede ou falha 3 vezes seguidas. Aviso quando os caracteres da ElevenLabs estiverem acabando e quando o `cookies.txt` vencer.
+5. **Aprender com os números.** Com os dados da Fase 8: a conta só sobe um degrau de ritmo se a média por post não caiu (hoje sobe só pelo calendário) e desce se cair vários dias seguidos; os horários de cada conta se ajustam aos que mais rendem; canais de origem cujos cortes rendem mais ganham prioridade na busca; os melhores e piores cortes viram exemplos para o cérebro. Só faz sentido depois de 2 a 4 semanas de posts reais.
+
+**Regras que continuam valendo:** o modo automático é uma chave explícita, desligada por padrão. O TikTok nunca entra no automático (as regras dele exigem a confirmação do dono em cada post). Nada de truque para escapar da detecção de direitos autorais (seção 9).
+
+**Depende do dono:** criar o robô do Telegram (sem ele não há vigia); decidir a VPS antes de 13/12/2026 (fim dos créditos da Oracle); contratar um plano pago da ElevenLabs (o grátis acabou e não permite uso comercial).
+
+**Como ligar:** só depois da etapa 4. Na primeira semana, o dono recebe a escalação no Telegram e pode vetar; depois disso, fica só o resumo diário.
+
+- **Pronto quando:** com a busca e o automático ligados, o canal roda 7 dias seguidos sem o dono abrir o painel: saem posts no YouTube, no Instagram e no Facebook todos os dias, nenhum corte é publicado mais de 3 dias depois de criado, o resumo chega no Telegram todo dia e o gasto fica abaixo do teto.
+- **Modelo:** Fable 5.2 (high) para o prompt do cérebro; Opus 5.5 (high) para a escalação no agendador; Sonnet 5.5 (medium) no restante.
 
 ## 7. Contas e chaves necessárias
 

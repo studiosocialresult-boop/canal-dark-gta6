@@ -2389,6 +2389,15 @@ class TesteBuscaDiaria(unittest.TestCase):
         self.assertTrue(self.d.TITULO_GTA.search("GTA VI trailer"))
         self.assertFalse(self.d.TITULO_GTA.search("GTA V mods"))
 
+    def test_titulo_com_spoiler_da_historia_nao_vai_para_a_fila(self):
+        for titulo in ("GTA 6 ENDING explained", "GTA 6 - Final do jogo", "GTA VI all cutscenes (game movie)",
+                       "GTA 6 filme completo dublado"):
+            item = dict(self.cand("ccccccccc01", 5, 500_000), titulo=titulo)
+            self.assertEqual(self.d._motivo_de_descarte(item, 1), ("ignorado", "O título indica spoiler da história"))
+        for titulo in ("GTA 6 trailer final", "GTA 6: 10 segredos que você não viu", "GTA 6 gameplay da primeira missão"):
+            item = dict(self.cand("ccccccccc02", 5, 500_000), titulo=titulo)
+            self.assertIsNone(self.d._motivo_de_descarte(item, 1))
+
     def test_rodar_enfileira_ate_a_meta_e_pula_repetidos_e_longos(self):
         banco.salvar_config(1, "meta_cortes_dia", 8)          # media 4 cortes por video -> 2 videos
         banco.registrar_video(1, "youtube", "bbbbbbbbbb1", "https://www.youtube.com/watch?v=bbbbbbbbbb1")

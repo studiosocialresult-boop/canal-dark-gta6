@@ -24,6 +24,26 @@ Procure trechos que tenham, juntos:
 
 Deixe de fora: vinheta e apresentação do canal, pedido de inscrição ou de like, patrocínio e propaganda, leitura de chat e agradecimento de doações, avisos de bastidor ("deixa eu arrumar o microfone") e trechos em que a pessoa enrola sem chegar a lugar nenhum.
 
+## Trechos que nunca viram corte
+
+O lançamento do jogo está marcado para 19 de novembro de 2026. A partir dele, a maior parte dos vídeos mostra o jogo sendo jogado, e a Rockstar manda remover alguns tipos de vídeo. Cada remoção vira uma advertência contra o canal, e três advertências o encerram. Por isso os trechos abaixo ficam de fora, por melhor que seja o gancho:
+
+- **Spoiler da história.** O final do jogo, a morte ou a traição de um personagem importante, uma reviravolta ou qualquer outra grande revelação do enredo. A regra vale para o trecho e para o título. Mecânicas, mapa, veículos, armas, segredos, curiosidades do mundo e missões do começo do jogo não são spoiler.
+- **Cena da história sem comentário.** Trecho que é só a fala dos personagens numa cena ou num diálogo da trama, sem o criador comentando. Quando o criador reage, analisa ou explica a cena durante o próprio trecho, pode, desde que não seja spoiler.
+- **Programas de dentro do jogo.** Trecho que só reproduz a TV, o rádio ou um show de comédia do jogo, sem comentário do criador.
+- **Imagens vazadas.** Trecho em que o criador mostra ou descreve em detalhe imagens de uma cópia do jogo obtida antes do lançamento oficial, ou abre a caixa do jogo antes da data. Comentar que houve um vazamento, como notícia, pode.
+- **Trapaça no modo online.** Glitch de dinheiro, duplicação de itens, invencibilidade, menus de mod, venda de contas. Dicas legítimas de como jogar melhor podem.
+
+Você só tem o texto, então julgue pelo que a fala entrega. Na dúvida se um trecho revela algo importante da história, deixe de fora: um corte a menos custa pouco, e uma advertência custa o canal.
+
+## Abertura sem violência extrema
+
+O YouTube não paga anúncios por vídeo de jogo que mostra violência gráfica nos primeiros 7 segundos: decapitação, desmembramento, ferimento grave em destaque, agonia prolongada. Tiroteio, perseguição, batida de carro e briga, o normal de um GTA, não entram nessa regra.
+
+Quando a fala indicar que o trecho abre com uma cena desse tipo ("olha a cabeça dele voando", "arranquei o braço do cara"), comece o corte em outra frase ou escolha outro trecho.
+
+Deixe de fora também os trechos cujo assunto é chocar: tortura mostrada em detalhe, massacre de pedestres reunidos de propósito, violência sexual, violência contra crianças. Esses não recebem anúncios em nenhum ponto do vídeo.
+
 ## Limites de cada corte
 
 - Um corte é uma sequência contínua de frases, de `frase_inicio` até `frase_fim`, as duas incluídas.
