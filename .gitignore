@@ -16,3 +16,6 @@ deploy/marca/*.mp4
 
 # Rascunhos de trabalho do Claude Code
 .superpowers/
+
+# configuracoes locais do Claude Code (permissoes deste computador)
+.claude/settings.local.json

@@ -167,8 +167,13 @@ def _duracao(arquivo) -> float:
     return _duracoes[chave]
 
 
-def candidatos(usuario_id: int, agora: datetime) -> list[Candidato]:
-    """Os cortes que podem entrar na escalacao, do mais forte para o mais fraco."""
+def candidatos(usuario_id: int, agora: datetime, fora: dict[str, int] | None = None) -> list[Candidato]:
+    """Os cortes que podem entrar na escalacao, do mais forte para o mais fraco.
+    `fora` (opcional) recebe a contagem de cortes deixados de fora, por motivo (para a previa)."""
+    def deixar_de_fora(motivo: str) -> None:
+        if fora is not None:
+            fora[motivo] = fora.get(motivo, 0) + 1
+
     nota_minima = banco.ler_config(usuario_id, "nota_minima_automatico")
     validade = timedelta(days=banco.ler_config(usuario_id, "validade_automatico_dias"))
     with closing(banco.conectar()) as conexao:
@@ -180,25 +185,31 @@ def candidatos(usuario_id: int, agora: datetime) -> list[Candidato]:
     lista = []
     for linha in banco.listar_cortes(usuario_id):
         if linha["id"] in vetados:
+            deixar_de_fora("vetado (post do automático cancelado)")
             continue
         if linha["estado"] == "renderizado":
             if linha["nota"] < nota_minima:
+                deixar_de_fora(f"nota abaixo de {nota_minima}")
                 continue
         elif not (linha["estado"] == "aprovado" and linha["id"] in do_automatico):
-            continue                       # aprovado pelo dono: ele decide onde vai; descartado/falhou: nunca
+            # aprovado pelo dono: ele decide onde vai; descartado/falhou: nunca
+            deixar_de_fora("aprovado por você" if linha["estado"] == "aprovado" else f"estado: {linha['estado']}")
+            continue
         idade = agora - agendador.momento(linha["criado_em"])
         if idade > validade:
+            deixar_de_fora(f"mais velho que {validade.days} dias")
             continue
         if linha["modo"] == "narrado" and linha["narracao_estado"] != "narrado":
-            continue                       # sem a voz, o corte narrado viraria so trecho com legenda
-        if not linha["caminho_arquivo"]:
+            deixar_de_fora("narrado sem a voz pronta")  # sem a voz, viraria so trecho com legenda
             continue
-        arquivo = config.caminho_absoluto(linha["caminho_arquivo"])
-        if not arquivo.exists():
+        arquivo = config.caminho_absoluto(linha["caminho_arquivo"]) if linha["caminho_arquivo"] else None
+        if arquivo is None or not arquivo.exists():
+            deixar_de_fora("sem o arquivo do vídeo")
             continue
         try:
             duracao = _duracao(arquivo)
         except renderizar.ErroRender:
+            deixar_de_fora("vídeo ilegível")
             continue
         pontos = linha["nota"] - PERDA_POR_DIA * max(idade.total_seconds(), 0) / 86400
         lista.append(Candidato(linha["id"], linha["titulo"], linha["modo"], linha["video_id"], linha["nota"],
@@ -325,7 +336,16 @@ if __name__ == "__main__":
     momento_agora = agendador.agora()
     print("Modo automático:", "LIGADO" if banco.ler_config(usuario, "modo_automatico") else "desligado (só a prévia)")
     print(f"Vagas por dia nas contas do automático: {vagas_por_dia(usuario)}")
-    print(f"Cortes que podem entrar: {len(candidatos(usuario, momento_agora))}")
+    de_fora: dict[str, int] = {}
+    print(f"Cortes que podem entrar: {len(candidatos(usuario, momento_agora, de_fora))}")
+    if de_fora:
+        print("Ficaram de fora:", "; ".join(f"{n} {motivo}" for motivo, n in sorted(de_fora.items(), key=lambda x: -x[1])))
+    faixas = {"90+": 0, "80-89": 0, "70-79": 0, "60-69": 0, "abaixo de 60": 0}
+    for _c in banco.listar_cortes(usuario):
+        _n = _c["nota"]
+        faixas["90+" if _n >= 90 else "80-89" if _n >= 80 else "70-79" if _n >= 70 else "60-69" if _n >= 60
+               else "abaixo de 60"] += 1
+    print("Notas de todos os cortes:", ", ".join(f"{faixa}: {n}" for faixa, n in faixas.items()))
     escala = montar(usuario, momento_agora)
     if not escala:
         print("Nenhuma conta do automático conectada (YouTube, Instagram ou Facebook).")
