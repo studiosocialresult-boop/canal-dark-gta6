@@ -263,7 +263,8 @@ CREATE TABLE IF NOT EXISTS publicacoes (
     erro TEXT,
     criado_em TEXT NOT NULL DEFAULT (datetime('now')),
     publicado_em TEXT,
-    removida_em TEXT
+    removida_em TEXT,
+    automatica INTEGER NOT NULL DEFAULT 0     -- 1: escolhida pela escalacao do modo automatico
 );
 CREATE UNIQUE INDEX IF NOT EXISTS publicacao_unica_por_conta
     ON publicacoes (conta_id, chave_video) WHERE estado != 'cancelada';
@@ -389,6 +390,8 @@ def _garantir_colunas(conexao) -> None:
     colunas = {l["name"] for l in conexao.execute("PRAGMA table_info(publicacoes)")}
     if colunas and "removida_em" not in colunas:
         conexao.execute("ALTER TABLE publicacoes ADD COLUMN removida_em TEXT")
+    if colunas and "automatica" not in colunas:
+        conexao.execute("ALTER TABLE publicacoes ADD COLUMN automatica INTEGER NOT NULL DEFAULT 0")
     colunas = {l["name"] for l in conexao.execute("PRAGMA table_info(contas)")}
     if colunas and "rampa" not in colunas:
         conexao.execute("ALTER TABLE contas ADD COLUMN rampa INTEGER NOT NULL DEFAULT 1")

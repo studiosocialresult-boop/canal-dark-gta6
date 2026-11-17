@@ -90,8 +90,9 @@ CONFIG_PADRAO = {
     "intervalo_tiktok_min": 180,
     "janela_inicio": 11,           # primeira hora do dia em que posta (fuso local): pega o almoco...
     "janela_fim": 23,              # ...o fim de tarde e o pico da noite (ultima hora, exclusiva)
-    "modo_automatico": 0,          # 1: aprova e agenda sozinho os cortes com nota alta (desligado por padrao)
+    "modo_automatico": 0,          # 1: escolhe e agenda sozinho os melhores cortes (desligado por padrao)
     "nota_minima_automatico": 80,  # nota minima para o modo automatico aprovar um corte
+    "validade_automatico_dias": 3, # corte mais velho que isso nao entra mais no automatico (fica para revisao)
     # Busca diaria
     "busca_ativa": 0,              # 1: busca sozinha todo dia e manda os melhores para a fila (gasta creditos de IA)
     "busca_hora": 6,               # hora do dia (fuso local) em que a busca roda

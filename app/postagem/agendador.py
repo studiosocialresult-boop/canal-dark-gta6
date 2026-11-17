@@ -2,7 +2,8 @@
 
 Regras:
 - Por padrao so entra o que foi aprovado no painel (cortes) ou gerado pelo dono (videos de template).
-  O modo automatico (desligado por padrao) aprova e agenda sozinho os cortes com nota alta.
+  O modo automatico (desligado por padrao) escolhe sozinho os melhores cortes para os horarios livres das
+  proximas 24 h (escalacao.py).
 - O mesmo conteudo nunca vai duas vezes para a mesma conta, mesmo com frase ou layout diferente
   (chave_video). Variacoes de um mesmo corte sao espalhadas entre contas diferentes.
 - Cada conta posta no seu ritmo (posts por dia), dentro da janela de horario, espaçado por igual e
@@ -15,6 +16,7 @@ Regras:
 """
 import sqlite3
 import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -221,12 +223,14 @@ def _textos(item: dict, usuario_id: int, cache: dict) -> dict:
 
 
 def agendar(usuario_id: int, itens: list[dict], conta_ids: list[int], *, horario: datetime | None = None,
-            distribuir: bool = False, opcoes_por_rede: dict | None = None, textos_prontos: dict | None = None) -> dict:
+            distribuir: bool = False, opcoes_por_rede: dict | None = None, textos_prontos: dict | None = None,
+            automatica: bool = False) -> dict:
     """Cria as publicacoes. Devolve {"criadas": [...], "puladas": [{"titulo", "conta", "motivo"}]}.
 
     horario: um horario fixo (UTC) para todas; sem ele, cada conta usa os proximos horarios livres.
     distribuir: cada item vai para UMA conta (a que ainda nao tem esse conteudo e esta mais livre).
     textos_prontos: {"titulo", "descricao", "hashtags"} editados pelo dono (vale para todos os itens).
+    automatica: a publicacao foi escolhida pela escalacao do modo automatico (e nao pelo dono).
     """
     contas_ok = _contas_validas(usuario_id, conta_ids)
     opcoes_por_rede = opcoes_por_rede or {}
@@ -283,7 +287,7 @@ def agendar(usuario_id: int, itens: list[dict], conta_ids: list[int], *, horario
                 publicacao_id = contas.criar_publicacao(
                     usuario_id, conta["id"], origem=item["origem"], corte_id=item["corte_id"], saida_id=item["saida_id"],
                     arquivo=item["arquivo"], chave_video=item["chave_video"], titulo=titulo, legenda=texto_post,
-                    opcoes=opcoes_por_rede.get(conta["rede"], {}), agendada_para=texto(quando))
+                    opcoes=opcoes_por_rede.get(conta["rede"], {}), agendada_para=texto(quando), automatica=automatica)
             except sqlite3.IntegrityError:
                 puladas.append({"titulo": item["titulo"], "conta": conta["nome"], "motivo": "já estava agendado"})
                 continue
@@ -367,30 +371,18 @@ def publicar_vencidas(momento_agora: datetime | None = None) -> int:
 
 # ---------- modo automatico ----------
 
-def rodar_modo_automatico(usuario_id: int) -> int:
-    """Se ligado: aprova os cortes prontos com nota alta e agenda nas contas que aceitam automatico."""
-    if not banco.ler_config(usuario_id, "modo_automatico"):
-        return 0
-    nota_minima = banco.ler_config(usuario_id, "nota_minima_automatico")
-    contas_auto = [c["id"] for c in contas.listar_contas(usuario_id)
-                   if c["ativa"] and c["estado"] == "conectada" and REDES[c["rede"]]["automatico"]]
-    if not contas_auto:
-        return 0
-    agendados = 0
-    for linha in banco.listar_cortes(usuario_id):
-        if linha["estado"] != "renderizado" or linha["nota"] < nota_minima:
-            continue
-        banco.atualizar_corte(linha["id"], estado="aprovado")
-        try:
-            resultado = agendar(usuario_id, [item_de_corte(linha["id"], usuario_id)], contas_auto)
-            agendados += len(resultado["criadas"])
-        except (ErroAgenda, renderizar.ErroRender) as erro:
-            log.warning("Modo automatico: corte %d nao agendado: %s", linha["id"], erro)
-    return agendados
+INTERVALO_ESCALACAO_S = 300        # a escalacao e refeita a cada 5 minutos (le os videos com o ffprobe)
+
+
+def rodar_modo_automatico(usuario_id: int, agora_utc: datetime | None = None, **opcoes) -> int:
+    """Se ligado: preenche os horarios livres que estao chegando com os melhores cortes (app/postagem/escalacao.py).
+    Devolve quantas publicacoes criou."""
+    from app.postagem import escalacao            # aqui dentro: a escalacao usa este modulo
+    return escalacao.rodar(usuario_id, agora_utc, **opcoes)
 
 
 class Publicador(threading.Thread):
-    """Thread do painel: a cada meio minuto publica o que venceu e roda o modo automatico."""
+    """Thread do painel: a cada meio minuto publica o que venceu; a cada 5 minutos roda o modo automatico."""
 
     def __init__(self, intervalo_s: float = 30):
         super().__init__(name="publicador", daemon=True)
@@ -399,9 +391,12 @@ class Publicador(threading.Thread):
 
     def run(self) -> None:
         contas.retomar_publicacoes_interrompidas()
+        ultima_escalacao = None
         while not self._parar.is_set():
             try:
-                rodar_modo_automatico(config.USUARIO_PADRAO)
+                if ultima_escalacao is None or time.monotonic() - ultima_escalacao >= INTERVALO_ESCALACAO_S:
+                    ultima_escalacao = time.monotonic()
+                    rodar_modo_automatico(config.USUARIO_PADRAO)
                 publicar_vencidas()
             except Exception as erro:            # nunca deixa a thread morrer
                 log.error("Publicador: erro inesperado: %s", erro)

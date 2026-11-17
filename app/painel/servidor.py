@@ -81,17 +81,25 @@ CONFIGURACOES = [
     ("janela_fim", "Para de postar às",
      "Depois desta hora a agenda não coloca posts. Das 11h às 23h pega o almoço, o fim da tarde e o pico da noite.", 1, 24, "h"),
     ("modo_automatico", "Modo 100% automático",
-     "Desligado: só vai para as redes o que você aprovar. Ligado: cortes com nota alta são aprovados e agendados sozinhos "
-     "(menos no TikTok, que exige sua confirmação em cada post).", 0, 1, ""),
+     "Desligado: só vai para as redes o que você aprovar. Ligado: a cada horário livre das próximas 24 h, o programa "
+     "escolhe o melhor corte pronto (nota mais alta e mais recente, sem repetir assunto e com narração pronta) e agenda "
+     "2 horas antes. O melhor do dia vai para perto das 20h30. Fica de fora o TikTok, que exige sua confirmação em cada "
+     "post. Para vetar um corte, cancele o post dele na Agenda: ele não volta mais.", 0, 1, ""),
     ("nota_minima_automatico", "Nota mínima no modo automático", "Só cortes com esta nota ou mais são aprovados sozinhos.", 50, 100, ""),
+    ("validade_automatico_dias", "Validade do corte no automático",
+     "Corte que não achou horário nesse prazo sai do automático (notícia velha não rende). Ele continua na tela "
+     "Cortes para você revisar.", 1, 14, " dias"),
     ("busca_ativa", "Busca diária automática",
      "Ligado: todo dia, na hora escolhida, o programa procura os vídeos de GTA 6 que mais crescem e manda os melhores "
      "para a fila (isso usa créditos da IA). Desligado: você só busca quando clicar em “Buscar agora” na tela Hoje.", 0, 1, ""),
     ("busca_hora", "Hora da busca diária", "Hora do dia (horário de Brasília) em que a busca roda.", 0, 23, "h"),
     ("busca_janela_h", "Só vídeos dos últimos…", "Vídeos postados há mais tempo que isso não entram no ranking.", 6, 168, "h"),
-    ("meta_cortes_dia", "Meta de cortes por dia", "A busca manda vídeos para a fila até chegar perto desse número de cortes.", 3, 60, ""),
+    ("meta_cortes_dia", "Meta de cortes por dia",
+     "A busca manda vídeos para a fila até chegar perto desse número de cortes. Com o modo automático ligado, ela mira "
+     "o dobro dos posts do dia nas contas (sem passar deste número), para não gastar IA com cortes que não teriam "
+     "horário.", 3, 60, ""),
     ("apagar_brutos_dias", "Apagar vídeos baixados com mais de…",
-     "Libera espaço no disco. Os cortes prontos e o registro ficam; se precisar do original, ele é baixado de novo.", 1, 60, "dias"),
+     "Libera espaço no disco. Os cortes prontos e o registro ficam; se precisar do original, ele é baixado de novo.", 1, 60, " dias"),
 ]
 
 

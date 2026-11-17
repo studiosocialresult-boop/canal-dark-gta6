@@ -2240,16 +2240,172 @@ class TesteAgendador(unittest.TestCase):
         self.assertEqual((p["estado"], p["tentativas"]), ("agendada", 0))
         self.assertIsNotNone(p["proxima_tentativa"])
 
-    def test_modo_automatico_desligado_e_ligado(self):
-        bom = self.novo_corte("renderizado")
-        self.assertEqual(self.ag.rodar_modo_automatico(1), 0)
+class TesteEscalacao(unittest.TestCase):
+    """Fase 9: o modo automatico escolhe os melhores cortes para as vagas das proximas 24 h.
+
+    Usa o usuario 2, para os cortes dos outros testes (usuario 1) nao entrarem na escalacao."""
+    U = 2
+    VIDEO = Path(__file__).parent / "exemplo_zoo.mp4"
+
+    @classmethod
+    def setUpClass(cls):
+        from app.postagem import agendador, contas, escalacao
+        cls.ag, cls.contas, cls.esc = agendador, contas, escalacao
+
+    def setUp(self):
+        import shutil, sqlite3
+        from datetime import datetime, timedelta, timezone
+        banco.criar_tabelas()
+        with sqlite3.connect(config.ARQUIVO_BANCO) as c:
+            c.execute("INSERT OR IGNORE INTO usuarios (id, nome) VALUES (?, 'teste escalacao')", (self.U,))
+            c.execute("DELETE FROM publicacoes"); c.execute("DELETE FROM contas")
+            c.execute("DELETE FROM narracoes WHERE usuario_id = ?", (self.U,))
+            c.execute("DELETE FROM cortes WHERE usuario_id = ?", (self.U,))
+            c.execute("DELETE FROM videos WHERE usuario_id = ?", (self.U,))
+            c.execute("DELETE FROM configuracoes WHERE usuario_id = ?", (self.U,))
+        destino = config.PASTA_CORTES / "escala" / "corte.mp4"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        if not destino.exists():
+            shutil.copy(self.VIDEO, destino)
+        self.arquivo = config.caminho_relativo(destino)
+        textos = {"titulo": "Título", "descricao": "Descrição.", "hashtags": ["GTA6", "Rockstar", "games"]}
+        p = mock.patch.object(self.ag.legenda, "escrever", return_value=textos); p.start(); self.addCleanup(p.stop)
+        # amanha as 13h de Brasilia: conta nova do YouTube posta as 14h e as 20h; Instagram e Facebook, as 17h
+        amanha = datetime.now(self.ag._fuso()).date() + timedelta(days=1)
+        self.agora = datetime(amanha.year, amanha.month, amanha.day, 13, tzinfo=self.ag._fuso()).astimezone(timezone.utc)
+        self.n = 0
+
+    def ligar(self):
+        banco.salvar_config(self.U, "modo_automatico", 1)
+
+    def conta(self, rede, nome):
+        return self.contas.salvar_conta(self.U, rede, f"{rede}-{nome}", nome, None, {"token": "x"}, 4)
+
+    def corte(self, nota=85, modo="original", titulo=None, narrado=False, estado="renderizado", video_id=None,
+              dias_atras=0):
+        import sqlite3
+        self.n += 1
+        if video_id is None:
+            video_id = banco.registrar_video(self.U, "youtube", f"escala{self.n:05d}", f"https://youtu.be/escala{self.n:05d}")
+        corte_id = banco.registrar_corte(self.U, video_id, CorteProposto(
+            1, 2, 0.0, 19.0, nota, "Motivo", titulo or f"Tema{self.n} alfa{self.n} beta{self.n}", modo))
+        banco.atualizar_corte(corte_id, estado=estado, caminho_arquivo=self.arquivo)
+        with sqlite3.connect(config.ARQUIVO_BANCO) as c:
+            if narrado:
+                c.execute("INSERT INTO narracoes (usuario_id, corte_id, roteiro, estado) VALUES (?, ?, '{}', 'narrado')",
+                          (self.U, corte_id))
+            if dias_atras:
+                c.execute("UPDATE cortes SET criado_em = datetime('now', ?) WHERE id = ?", (f"-{dias_atras} days", corte_id))
+        return corte_id
+
+    def local(self, horario):
+        return horario.astimezone(self.ag._fuso()).strftime("%H:%M")
+
+    def plano(self):
+        """{(conta, 'HH:MM'): corte_id ou None}"""
+        return {(v.conta["nome"], self.local(v.horario)): v.candidato.corte_id if v.candidato else None
+                for v in self.esc.montar(self.U, self.agora)}
+
+    def test_desligado_nao_agenda_e_tiktok_nunca_entra(self):
+        bom = self.corte()
+        self.conta("youtube", "YT"); self.conta("facebook", "FB")
+        tt = self.conta("tiktok", "TT")
+        self.assertEqual(self.ag.rodar_modo_automatico(self.U, self.agora, antecedencia_h=24), 0)
         self.assertEqual(banco.ler_corte(bom)["estado"], "renderizado")
-        tt = self.contas.salvar_conta(1, "tiktok", "OPEN2", "TikTok", None, {"access_token": "a"}, 2)
-        banco.salvar_config(1, "modo_automatico", 1)
-        self.addCleanup(banco.salvar_config, 1, "modo_automatico", 0)
-        self.assertEqual(self.ag.rodar_modo_automatico(1), 2)                    # YouTube + Facebook, nunca TikTok
+        self.ligar()
+        self.assertEqual(self.ag.rodar_modo_automatico(self.U, self.agora, antecedencia_h=24), 2)   # YouTube e Facebook
         self.assertEqual(banco.ler_corte(bom)["estado"], "aprovado")
-        self.assertFalse(any(p["conta_id"] == tt for p in self.contas.listar_publicacoes(1)))
+        publicacoes = self.contas.listar_publicacoes(self.U)
+        self.assertFalse(any(p["conta_id"] == tt for p in publicacoes))
+        self.assertTrue(all(p["automatica"] == 1 for p in publicacoes))
+        # rodar de novo nao repete nada
+        self.assertEqual(self.ag.rodar_modo_automatico(self.U, self.agora, antecedencia_h=24), 0)
+
+    def test_melhor_corte_vai_para_o_nobre_e_a_vaga_so_fecha_perto_da_hora(self):
+        self.conta("youtube", "YT")
+        melhor = self.corte(nota=95, modo="narrado", narrado=True, titulo="Trailer mostra a praia de Vice City")
+        segundo = self.corte(nota=82, titulo="Polícia persegue carro pelo mapa")
+        self.assertEqual(self.plano(), {("YT", "14:00"): segundo, ("YT", "20:00"): melhor})
+        self.ligar()
+        self.assertEqual(self.ag.rodar_modo_automatico(self.U, self.agora), 1)        # so a vaga das 14h fecha agora
+        self.assertEqual([self.local(self.ag.momento(p["agendada_para"])) for p in self.contas.listar_publicacoes(self.U)],
+                         ["14:00"])
+        self.assertEqual(banco.ler_corte(segundo)["estado"], "aprovado")
+        self.assertEqual(banco.ler_corte(melhor)["estado"], "renderizado")             # ainda pode perder a vaga
+
+    def test_quem_entra_e_quem_fica_de_fora(self):
+        yt = self.conta("youtube", "YT")
+        bom = self.corte()
+        self.corte(nota=70)                                                   # abaixo da nota minima (80)
+        self.corte(nota=90, modo="narrado")                                   # narrado sem a voz pronta
+        self.corte(nota=90, dias_atras=5)                                     # velho demais (validade de 3 dias)
+        self.corte(nota=90, estado="descartado")
+        self.corte(nota=90, estado="aprovado")                                # aprovado pelo dono: ele decide
+        vetado = self.corte(nota=90)
+        publicacao = self.contas.criar_publicacao(self.U, yt, origem="corte", corte_id=vetado, saida_id=None,
+                                                  arquivo=self.arquivo, chave_video=f"corte:{vetado}", titulo="t",
+                                                  legenda="l", opcoes={}, agendada_para="2030-01-01 12:00:00",
+                                                  automatica=True)
+        self.contas.atualizar_publicacao(publicacao, estado="cancelada")     # o dono cancelou: veto
+        self.assertEqual([c.corte_id for c in self.esc.candidatos(self.U, self.agora)], [bom])
+        banco.salvar_config(self.U, "validade_automatico_dias", 7)
+        self.assertEqual(len(self.esc.candidatos(self.U, self.agora)), 2)
+
+    def test_mais_novo_ganha_de_nota_um_pouco_maior(self):
+        self.conta("youtube", "YT")
+        velho = self.corte(nota=88, modo="narrado", narrado=True, dias_atras=2)
+        novo = self.corte(nota=84, modo="narrado", narrado=True)
+        self.assertEqual([c.corte_id for c in self.esc.candidatos(self.U, self.agora)], [novo, velho])
+
+    def test_assunto_parecido(self):
+        p = self.esc.palavras_do_titulo
+        self.assertTrue(self.esc.mesmo_assunto(p("Data de lançamento de GTA 6 vazou no trailer"),
+                                               p("Trailer revela a data de lançamento de GTA 6")))
+        self.assertFalse(self.esc.mesmo_assunto(p("Trailer revela a data de lançamento de GTA 6"),
+                                                p("Polícia persegue carro pelo mapa")))
+        self.assertFalse(self.esc.mesmo_assunto(p("Mapa de GTA 6 é o dobro do GTA 5"),
+                                                p("Mapa de Vice City tem segredo escondido")))
+        # na escala: um post de ontem sobre a data barra um corte novo sobre a data na mesma conta, nao em outra
+        yt = self.conta("youtube", "YT"); self.conta("facebook", "FB")
+        antigo = self.corte(estado="aprovado", titulo="Data de lançamento de GTA 6 vazou no trailer")
+        self.contas.criar_publicacao(self.U, yt, origem="corte", corte_id=antigo, saida_id=None, arquivo=self.arquivo,
+                                     chave_video=f"corte:{antigo}", titulo="t", legenda="l", opcoes={},
+                                     agendada_para=self.ag.texto(self.agora - __import__("datetime").timedelta(hours=20)))
+        repetido = self.corte(modo="narrado", narrado=True, titulo="Trailer revela a data de lançamento de GTA 6")
+        plano = self.plano()
+        self.assertNotIn(repetido, [plano[("YT", "14:00")], plano[("YT", "20:00")]])
+        self.assertEqual(plano[("FB", "17:00")], repetido)
+
+    def test_cortes_de_audio_original_nao_ficam_seguidos(self):
+        self.conta("youtube", "YT")
+        self.corte(nota=90); self.corte(nota=88)
+        self.assertEqual(sum(1 for c in self.plano().values() if c), 1)      # o segundo esperaria outro tipo de corte
+        self.corte(nota=81, modo="narrado", narrado=True)
+        self.assertEqual(sum(1 for c in self.plano().values() if c), 2)
+
+    def test_dois_cortes_do_mesmo_video_nao_saem_no_mesmo_dia_na_conta(self):
+        self.conta("youtube", "YT")
+        primeiro = self.corte(modo="narrado", narrado=True)
+        self.corte(modo="narrado", narrado=True, video_id=banco.ler_corte(primeiro)["video_id"])
+        self.assertEqual(sum(1 for c in self.plano().values() if c), 1)
+
+    def test_mesma_rede_uma_conta_so_e_redes_espacadas(self):
+        self.conta("youtube", "YT1"); self.conta("youtube", "YT2"); self.conta("facebook", "FB")
+        unico = self.corte()
+        escala = [v for v in self.esc.montar(self.U, self.agora) if v.candidato]
+        self.assertEqual(sorted(v.conta["rede"] for v in escala), ["facebook", "youtube"])
+        self.assertTrue(all(v.candidato.corte_id == unico for v in escala))
+        horarios = sorted(v.horario for v in escala)
+        self.assertGreaterEqual(horarios[1] - horarios[0], self.esc.ESPACO_ENTRE_REDES)
+
+    def test_busca_mira_o_dobro_das_vagas_com_o_automatico(self):
+        from app.busca import diaria
+        self.conta("youtube", "YT"); self.conta("facebook", "FB")             # contas novas: 2 + 1 posts por dia
+        self.assertEqual(diaria.meta_de_cortes(self.U), 15)                   # automatico desligado: a meta normal
+        self.ligar()
+        self.assertEqual(diaria.meta_de_cortes(self.U), 6)
+        banco.salvar_config(self.U, "meta_cortes_dia", 4)
+        self.assertEqual(diaria.meta_de_cortes(self.U), 4)                    # nunca passa da meta escolhida
 
 
 class TestePainelPostagem(unittest.TestCase):

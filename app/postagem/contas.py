@@ -87,13 +87,13 @@ def remover_conta(conta_id: int) -> None:
 
 def criar_publicacao(usuario_id: int, conta_id: int, *, origem: str, corte_id: int | None, saida_id: int | None,
                      arquivo: str, chave_video: str, titulo: str, legenda: str, opcoes: dict,
-                     agendada_para: str) -> int:
+                     agendada_para: str, automatica: bool = False) -> int:
     with closing(banco.conectar()) as conexao, conexao:
         return conexao.execute(
             "INSERT INTO publicacoes (usuario_id, conta_id, origem, corte_id, saida_id, arquivo, chave_video, titulo, "
-            "legenda, opcoes, agendada_para) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "legenda, opcoes, agendada_para, automatica) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (usuario_id, conta_id, origem, corte_id, saida_id, arquivo, chave_video, titulo, legenda,
-             json.dumps(opcoes, ensure_ascii=False), agendada_para)).lastrowid
+             json.dumps(opcoes, ensure_ascii=False), agendada_para, int(automatica))).lastrowid
 
 
 def chaves_usadas(conta_id: int) -> set[str]:

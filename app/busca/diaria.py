@@ -182,9 +182,23 @@ def remover_canal(usuario_id: int, canal_id: int) -> bool:
 
 # ---------- execucao ----------
 
+def meta_de_cortes(usuario_id: int) -> int:
+    """Quantos cortes novos por dia a busca tenta gerar.
+
+    Com o modo automatico ligado, o dobro das vagas do dia nas contas (sobra para a escalacao escolher os
+    melhores), sem passar de `meta_cortes_dia`. Produzir muito mais do que cabe nas contas so gasta IA e voz."""
+    meta = banco.ler_config(usuario_id, "meta_cortes_dia")
+    if banco.ler_config(usuario_id, "modo_automatico"):
+        from app.postagem import escalacao          # aqui dentro: evita carregar a postagem so para a busca
+        vagas = escalacao.vagas_por_dia(usuario_id)
+        if vagas:
+            meta = min(meta, 2 * vagas)
+    return meta
+
+
 def videos_para_a_meta(usuario_id: int, dia: str) -> int:
     """Quantos videos ainda faltam enfileirar hoje para chegar na meta de cortes."""
-    meta_cortes = banco.ler_config(usuario_id, "meta_cortes_dia")
+    meta_cortes = meta_de_cortes(usuario_id)
     media = (banco.ler_config(usuario_id, "cortes_min") + banco.ler_config(usuario_id, "cortes_max")) / 2
     total = math.ceil(meta_cortes / max(media, 1))
     with closing(banco.conectar()) as conexao:
