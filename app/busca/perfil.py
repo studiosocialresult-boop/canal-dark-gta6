@@ -109,25 +109,36 @@ def _cookies():
     return pote
 
 
-def _data_do_video(video_id: str, cookies=None) -> str | None:
-    """Data de publicacao (ISO) lida na pagina do video. None se nao deu (so some a velocidade)."""
+def _info_do_video(video_id: str, cookies=None) -> dict:
+    """Data de publicacao (ISO) e visualizacoes lidas na pagina do video. O que nao der fica None."""
     try:
         resposta = requests.get(f"https://www.youtube.com/watch?v={video_id}", headers=CABECALHOS,
                                 cookies=cookies, timeout=20)
-        achou = (re.search(r'itemprop="datePublished" content="([^"]+)"', resposta.text)
-                 or re.search(r'"publishDate":"([^"]+)"', resposta.text))
     except requests.RequestException:
-        return None
-    return achou.group(1) if achou else None
+        return {"publicado": None, "views": None}
+    data = (re.search(r'itemprop="datePublished" content="([^"]+)"', resposta.text)
+            or re.search(r'"publishDate":"([^"]+)"', resposta.text))
+    views = re.search(r'"viewCount":"(\d+)"', resposta.text)
+    return {"publicado": data.group(1) if data else None, "views": int(views.group(1)) if views else None}
 
 
-def _datas(ids: list[str]) -> dict[str, str]:
-    """Le as datas de varios videos ao mesmo tempo."""
+def _data_do_video(video_id: str, cookies=None) -> str | None:
+    """Data de publicacao (ISO) lida na pagina do video. None se nao deu (so some a velocidade)."""
+    return _info_do_video(video_id, cookies)["publicado"]
+
+
+def _infos(ids: list[str]) -> dict[str, dict]:
+    """Le a data e as visualizacoes de varios videos ao mesmo tempo."""
     if not ids:
         return {}
     cookies = _cookies()
     with ThreadPoolExecutor(max_workers=6) as grupo:
-        return {i: d for i, d in zip(ids, grupo.map(lambda v: _data_do_video(v, cookies), ids)) if d}
+        return dict(zip(ids, grupo.map(lambda v: _info_do_video(v, cookies), ids)))
+
+
+def _datas(ids: list[str]) -> dict[str, str]:
+    """Le as datas de varios videos ao mesmo tempo."""
+    return {i: info["publicado"] for i, info in _infos(ids).items() if info["publicado"]}
 
 
 def velocidade(views: int | None, publicado: str | None, agora: datetime | None = None) -> float | None:

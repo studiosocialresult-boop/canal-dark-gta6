@@ -109,10 +109,17 @@ def coletar_busca() -> list[dict]:
         for item in _buscar_no_youtube(consulta, filtro):
             if TITULO_GTA.search(item["titulo"]):
                 unicos.setdefault(item["id_externo"], item)
-    ordenados = sorted(unicos.values(), key=lambda i: -(i["views"] or 0))[:MAX_COM_DATA]
-    datas = perfil._datas([i["id_externo"] for i in ordenados])
+    # Sem as visualizacoes na lista, o desempate poe os brasileiros entre os que vao ter a pagina lida.
+    ordenados = sorted(unicos.values(),
+                       key=lambda i: (-(i["views"] or 0), not parece_brasileiro(i["titulo"])))[:MAX_COM_DATA]
+    # A data so aparece na pagina do video. As visualizacoes vinham na lista da busca, mas o YouTube
+    # deixou de mostra-las ali em 16/11/2026; quando faltam, valem as da pagina do video.
+    infos = perfil._infos([i["id_externo"] for i in ordenados])
     for item in ordenados:
-        item["publicado"] = datas.get(item["id_externo"])
+        info = infos.get(item["id_externo"]) or {}
+        item["publicado"] = info.get("publicado")
+        if not item["views"]:
+            item["views"] = info.get("views")
     return ordenados
 
 
