@@ -6,7 +6,12 @@
   let originais = {}, atuais = {};
 
   function desenharAjustes(valores) {
-    $("#ajustes").innerHTML = valores.map((v) => v.minimo === 0 && v.maximo === 1 ? `
+    $("#ajustes").innerHTML = valores.map((v) => v.minimo === null ? `
+      <div class="ajuste">
+        <div class="ajuste-topo"><b>${esc(v.nome)}</b></div>
+        <input class="campo" type="text" data-chave="${v.chave}" value="${esc(v.valor)}" placeholder="vazio = espalhar por igual" autocomplete="off">
+        <small>${esc(v.ajuda)}</small>
+      </div>` : v.minimo === 0 && v.maximo === 1 ? `
       <div class="ajuste">
         <label class="interruptor"><input type="checkbox" data-chave="${v.chave}" ${v.valor ? "checked" : ""}>${esc(v.nome)}</label>
         <small>${esc(v.ajuda)}</small>
@@ -18,6 +23,10 @@
       </div>`).join("");
     document.querySelectorAll("#ajustes input[type=checkbox]").forEach((c) => c.addEventListener("change", () => {
       atuais[c.dataset.chave] = c.checked ? 1 : 0;
+      $("#salvar").disabled = JSON.stringify(atuais) === JSON.stringify(originais);
+    }));
+    document.querySelectorAll("#ajustes input[type=text]").forEach((t) => t.addEventListener("input", () => {
+      atuais[t.dataset.chave] = t.value;
       $("#salvar").disabled = JSON.stringify(atuais) === JSON.stringify(originais);
     }));
     document.querySelectorAll("input[type=range]").forEach((r) => r.addEventListener("input", () => {

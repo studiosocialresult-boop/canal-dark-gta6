@@ -128,16 +128,10 @@ def vagas_por_dia(usuario_id: int, dia: date | None = None) -> int:
     return sum(agendador.ritmo_no_dia(conta, dia) for conta in contas_do_automatico(usuario_id))
 
 
-def _janela(usuario_id: int) -> tuple[int, int]:
-    inicio_h, fim_h = banco.ler_config(usuario_id, "janela_inicio"), banco.ler_config(usuario_id, "janela_fim")
-    return (inicio_h, fim_h) if 0 <= inicio_h < fim_h <= 24 else (9, 22)
-
-
 def _horario_nobre(conta: dict, dia: date, usuario_id: int) -> datetime | None:
     """O horario da conta naquele dia que fica mais perto das 20h30 (dos horarios do ritmo dela)."""
-    inicio_h, fim_h = _janela(usuario_id)
-    grade = agendador.horarios_do_dia(dia, agendador.ritmo_no_dia(conta, dia), inicio_h, fim_h,
-                                      agendador.intervalo_da_conta(conta, usuario_id))
+    grade = agendador.grade_do_dia(dia, agendador.ritmo_no_dia(conta, dia), usuario_id,
+                                   agendador.intervalo_da_conta(conta, usuario_id))
     centro = datetime(dia.year, dia.month, dia.day, *CENTRO_NOBRE, tzinfo=agendador._fuso())
     return min(grade, key=lambda h: abs(h - centro)) if grade else None
 

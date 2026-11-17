@@ -263,7 +263,8 @@ class TestePipelineCompleto(unittest.TestCase):
         with mock.patch.object(baixar, "baixar", return_value=video), \
              mock.patch.object(escolher, "escolher_cortes", side_effect=cerebro_com_cliente_falso), \
              mock.patch.object(traduzir, "traduzir_frases", side_effect=traducao_falsa) as traduz, \
-             mock.patch.object(modulo_roteiro, "roteirizar_corte") as roteiriza:
+             mock.patch.object(modulo_roteiro, "roteirizar_corte") as roteiriza, \
+             mock.patch.object(pipeline.voz, "tem_saldo", return_value=True):     # nao consulta a ElevenLabs
             arquivos = pipeline.processar_link(link)
             roteiriza.assert_called_once()                    # nota 88: ganha roteiro
             self.assertEqual(len(arquivos), 1)

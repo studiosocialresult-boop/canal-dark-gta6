@@ -80,6 +80,10 @@ CONFIGURACOES = [
     ("janela_inicio", "Começa a postar às", "Primeira hora do dia em que a agenda coloca posts (horário de Brasília).", 0, 23, "h"),
     ("janela_fim", "Para de postar às",
      "Depois desta hora a agenda não coloca posts. Das 11h às 23h pega o almoço, o fim da tarde e o pico da noite.", 1, 24, "h"),
+    ("horarios_fixos", "Horários fixos de postagem",
+     "Separe por vírgula, ex.: 7, 11, 18, 22 (ou 18:30). Preenchido, vale no lugar do “Começa/Para de postar”. "
+     "Conta nova que ainda posta menos vezes por dia usa os horários mais perto do pico da noite. "
+     "Deixe vazio para espalhar os posts por igual.", None, None, ""),
     ("modo_automatico", "Modo 100% automático",
      "Desligado: só vai para as redes o que você aprovar. Ligado: a cada horário livre das próximas 24 h, o programa "
      "escolhe o melhor corte pronto (nota mais alta e mais recente, sem repetir assunto e com narração pronta) e agenda "
@@ -280,6 +284,13 @@ def criar_app() -> FastAPI:
         for chave, valor in dados.items():
             if chave not in limites:
                 raise HTTPException(400, f"Configuração desconhecida: {chave}")
+            if chave == "horarios_fixos":
+                try:
+                    horarios = agendador.ler_horarios_fixos(str(valor))
+                except ValueError as erro:
+                    raise HTTPException(400, str(erro))
+                novos[chave] = ", ".join(f"{h}:{m:02d}" for h, m in horarios)
+                continue
             try:
                 valor = int(valor)
             except (TypeError, ValueError):

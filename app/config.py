@@ -90,6 +90,8 @@ CONFIG_PADRAO = {
     "intervalo_tiktok_min": 180,
     "janela_inicio": 11,           # primeira hora do dia em que posta (fuso local): pega o almoco...
     "janela_fim": 23,              # ...o fim de tarde e o pico da noite (ultima hora, exclusiva)
+    # Horarios fixos de postagem (ex.: "7, 11, 18, 22"). Vazio: espaca os posts por igual na janela acima.
+    "horarios_fixos": "",
     "modo_automatico": 0,          # 1: escolhe e agenda sozinho os melhores cortes (desligado por padrao)
     # Nota minima para o modo automatico usar um corte. 70 porque so ~1 em cada 10 cortes chega a 80 (previa
     # real de 16/11/2026: com 80, o automatico acharia menos de 1 corte por dia para 4 vagas).

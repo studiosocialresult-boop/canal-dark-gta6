@@ -14,6 +14,7 @@ Regras:
   para conectar de novo; erro definitivo marca a publicacao como falha, com o motivo.
 - TikTok nunca e agendado pelo modo automatico: as regras dele exigem escolha e confirmacao do dono.
 """
+import re
 import sqlite3
 import threading
 import time
@@ -80,6 +81,46 @@ def horarios_do_dia(dia: date, por_dia: int, inicio_h: int, fim_h: int, interval
     return [(abertura + timedelta(minutes=m)).astimezone(timezone.utc) for m in minutos]
 
 
+CENTRO_NOBRE = (20, 30)       # pico do publico brasileiro
+
+
+def ler_horarios_fixos(texto: str) -> list[tuple[int, int]]:
+    """Converte "7, 11:30, 18h, 22" em [(7, 0), (11, 30), (18, 0), (22, 0)], em ordem e sem repetir.
+    Levanta ValueError com uma explicacao simples se algum horario nao fizer sentido."""
+    horarios = set()
+    for parte in re.split(r"[,;\s]+", (texto or "").strip().lower()):
+        if not parte:
+            continue
+        achou = re.fullmatch(r"(\d{1,2})(?:[:h](\d{2})?)?h?", parte)
+        if not achou:
+            raise ValueError(f"Não entendi o horário “{parte}”. Use assim: 7, 11, 18:30, 22")
+        hora, minuto = int(achou.group(1)), int(achou.group(2) or 0)
+        if hora > 23 or minuto > 59:
+            raise ValueError(f"O horário “{parte}” não existe.")
+        horarios.add((hora, minuto))
+    return sorted(horarios)
+
+
+def grade_do_dia(dia: date, por_dia: int, usuario_id: int, intervalo_min: int = 0) -> list[datetime]:
+    """Horarios (UTC) de uma conta num dia: os horarios fixos, se o dono escolheu, ou espacados na janela.
+
+    Com horarios fixos e uma conta que posta menos vezes do que ha horarios (conta nova subindo o ritmo),
+    ficam os mais perto do pico da noite (20h30)."""
+    try:
+        fixos = ler_horarios_fixos(banco.ler_config(usuario_id, "horarios_fixos"))
+    except ValueError:
+        fixos = []
+    if not fixos:
+        inicio_h, fim_h = banco.ler_config(usuario_id, "janela_inicio"), banco.ler_config(usuario_id, "janela_fim")
+        if not 0 <= inicio_h < fim_h <= 24:
+            inicio_h, fim_h = 9, 22
+        return horarios_do_dia(dia, por_dia, inicio_h, fim_h, intervalo_min)
+    pico = CENTRO_NOBRE[0] * 60 + CENTRO_NOBRE[1]
+    escolhidos = sorted(sorted(fixos, key=lambda h: abs(h[0] * 60 + h[1] - pico))[:max(1, por_dia)])
+    return [datetime(dia.year, dia.month, dia.day, h, m, tzinfo=_fuso()).astimezone(timezone.utc)
+            for h, m in escolhidos]
+
+
 # ---------- ritmo de cada conta ----------
 
 SEMANAS_POR_DEGRAU = 2
@@ -131,6 +172,10 @@ def proximos_horarios(conta: dict, quantidade: int, usuario_id: int, reservados:
     if not 0 <= inicio_h < fim_h <= 24:
         inicio_h, fim_h = 9, 22
     intervalo = intervalo_da_conta(conta, usuario_id)
+    try:
+        fixos = ler_horarios_fixos(banco.ler_config(usuario_id, "horarios_fixos"))
+    except ValueError:
+        fixos = []
     ocupados = [momento(t) for t in contas.horarios_ocupados(conta["id"])] + [momento(t) for t in (reservados or set())]
     minimo = (depois_de or agora()) + timedelta(minutes=MARGEM_MIN)
     livres = []
@@ -139,8 +184,9 @@ def proximos_horarios(conta: dict, quantidade: int, usuario_id: int, reservados:
         por_dia = ritmo_no_dia(conta, dia)
         passo = timedelta(minutes=(fim_h - inicio_h) * 60 / por_dia)
         # distancia minima de qualquer outro post da conta: meio passo ou o intervalo minimo, o que for maior
-        folga = max(passo / 2, timedelta(minutes=intervalo))
-        for horario in horarios_do_dia(dia, por_dia, inicio_h, fim_h, intervalo):
+        # (com horarios fixos, so o intervalo minimo: os horarios ja foram escolhidos pelo dono)
+        folga = timedelta(minutes=intervalo) if fixos else max(passo / 2, timedelta(minutes=intervalo))
+        for horario in grade_do_dia(dia, por_dia, usuario_id, intervalo):
             if horario < minimo or any(abs(horario - o) < folga for o in ocupados):
                 continue
             livres.append(horario)
