@@ -74,6 +74,32 @@ def pasta_da_narracao(corte_id: int) -> Path:
 
 # ---------- conversa com a ElevenLabs ----------
 
+URL_ASSINATURA = "https://api.elevenlabs.io/v1/user/subscription"
+SALDO_MINIMO = 500   # caracteres; abaixo disso nao da para narrar nem um corte curto
+
+
+def tem_saldo(minimo: int = SALDO_MINIMO) -> bool:
+    """Diz se ainda sobram caracteres na ElevenLabs para narrar.
+
+    Se nao der para consultar (internet, chave sem permissao de leitura), responde que sim
+    e deixa a propria narracao tentar e avisar do erro.
+    """
+    chave = os.getenv("ELEVENLABS_API_KEY")
+    if not chave:
+        return False
+    try:
+        resposta = requests.get(URL_ASSINATURA, headers={"xi-api-key": chave}, timeout=20)
+        if not resposta.ok:
+            return True
+        dados = resposta.json()
+        sobra = int(dados["character_limit"]) - int(dados["character_count"])
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return True
+    if sobra < minimo:
+        log.info("Voz: so restam %d caracteres na ElevenLabs.", sobra)
+        return False
+    return True
+
 def _pedir_voz(texto: str, tentativas: int = 3, espera_s: float = 10.0) -> tuple[bytes, dict]:
     """Pede a voz de um texto. Devolve (audio mp3, tempos por caractere)."""
     chave = os.getenv("ELEVENLABS_API_KEY")

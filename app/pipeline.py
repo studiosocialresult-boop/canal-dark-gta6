@@ -54,10 +54,13 @@ def processar_link(url: str, usuario_id: int = config.USUARIO_PADRAO,
         transcricao = _etapa_transcricao(video_id, video)
         avisar("A IA está escolhendo os melhores momentos")
         _etapa_cerebro(video_id, usuario_id, video, transcricao)
-        avisar("Escrevendo as narrações")
-        _etapa_roteiro(video_id, usuario_id)
-        avisar("Gravando as vozes")
-        _etapa_voz(video_id)
+        if voz.tem_saldo():
+            avisar("Escrevendo as narrações")
+            _etapa_roteiro(video_id, usuario_id)
+            avisar("Gravando as vozes")
+            _etapa_voz(video_id)
+        else:
+            _so_audio_original(video_id)
         arquivos = _etapa_edicao(video_id, usuario_id, video, transcricao, avisar)
     except Exception as erro:
         log.error("O video %d falhou: %s", video_id, erro)
@@ -115,6 +118,15 @@ def _etapa_cerebro(video_id: int, usuario_id: int, video: VideoBaixado,
     for corte in cortes:
         banco.registrar_corte(usuario_id, video_id, corte)
     banco.atualizar_video(video_id, estado="analisado")
+
+
+def _so_audio_original(video_id: int) -> None:
+    """Sem caracteres na ElevenLabs: os cortes saem com o audio original e legenda,
+    sem roteiro nem gancho narrado. Quando o saldo voltar, tudo volta ao normal sozinho."""
+    log.info("Voz: sem saldo na ElevenLabs. Os cortes deste video saem so com o audio original.")
+    for linha in banco.cortes_do_video(video_id):
+        if linha["modo"] == "narrado" and linha["estado"] in ("proposto", "falhou"):
+            banco.atualizar_corte(linha["id"], modo="original")
 
 
 def _etapa_roteiro(video_id: int, usuario_id: int) -> None:
@@ -196,6 +208,10 @@ def _renderizar(linha, usuario_id: int, video: VideoBaixado, transcricao: Transc
 def narrar_e_renderizar(corte_id: int, progresso=None) -> Path:
     """Escreve o roteiro, grava a voz e refaz o mp4 de um corte. Usado pelo botao "narrar"."""
     avisar = progresso or (lambda _texto: None)
+    # Confere antes, para nao pagar o roteiro da IA sem ter como gravar a voz.
+    if not voz.tem_saldo():
+        raise voz.ErroVoz("Acabaram os caracteres do plano da ElevenLabs neste mes. "
+                          "Espere a renovacao ou mude de plano no site da ElevenLabs.")
     avisar("Escrevendo a narração")
     roteiro.roteirizar_corte(corte_id)
     avisar("Gravando a voz")

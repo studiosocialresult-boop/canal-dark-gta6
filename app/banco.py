@@ -348,7 +348,7 @@ CAMPOS_VIDEO = {
     "titulo", "canal", "duracao_s", "idioma", "caminho_arquivo",
     "caminho_transcricao", "estado", "erro",
 }
-CAMPOS_CORTE = {"estado", "caminho_arquivo", "erro", "frase_gancho"}
+CAMPOS_CORTE = {"estado", "caminho_arquivo", "erro", "frase_gancho", "modo"}
 CAMPOS_NARRACAO = {"caminho_audio", "estado", "erro"}
 CAMPOS_FILA = {"estado", "progresso", "resultado", "iniciado_em", "terminado_em"}
 
