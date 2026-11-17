@@ -2336,7 +2336,7 @@ class TesteEscalacao(unittest.TestCase):
     def test_quem_entra_e_quem_fica_de_fora(self):
         yt = self.conta("youtube", "YT")
         bom = self.corte()
-        self.corte(nota=70)                                                   # abaixo da nota minima (80)
+        self.corte(nota=65)                                                   # abaixo da nota minima (70)
         self.corte(nota=90, modo="narrado")                                   # narrado sem a voz pronta
         self.corte(nota=90, dias_atras=5)                                     # velho demais (validade de 3 dias)
         self.corte(nota=90, estado="descartado")

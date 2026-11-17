@@ -85,7 +85,9 @@ CONFIGURACOES = [
      "escolhe o melhor corte pronto (nota mais alta e mais recente, sem repetir assunto e com narração pronta) e agenda "
      "2 horas antes. O melhor do dia vai para perto das 20h30. Fica de fora o TikTok, que exige sua confirmação em cada "
      "post. Para vetar um corte, cancele o post dele na Agenda: ele não volta mais.", 0, 1, ""),
-    ("nota_minima_automatico", "Nota mínima no modo automático", "Só cortes com esta nota ou mais são aprovados sozinhos.", 50, 100, ""),
+    ("nota_minima_automatico", "Nota mínima no modo automático",
+     "Só cortes com esta nota ou mais entram no automático, que escolhe sempre os melhores para cada horário. "
+     "Recomendado: 70 (só 1 em cada 10 cortes chega a 80; com nota alta demais, sobram horários vazios).", 50, 100, ""),
     ("validade_automatico_dias", "Validade do corte no automático",
      "Corte que não achou horário nesse prazo sai do automático (notícia velha não rende). Ele continua na tela "
      "Cortes para você revisar.", 1, 14, " dias"),

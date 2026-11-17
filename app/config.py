@@ -91,7 +91,9 @@ CONFIG_PADRAO = {
     "janela_inicio": 11,           # primeira hora do dia em que posta (fuso local): pega o almoco...
     "janela_fim": 23,              # ...o fim de tarde e o pico da noite (ultima hora, exclusiva)
     "modo_automatico": 0,          # 1: escolhe e agenda sozinho os melhores cortes (desligado por padrao)
-    "nota_minima_automatico": 80,  # nota minima para o modo automatico aprovar um corte
+    # Nota minima para o modo automatico usar um corte. 70 porque so ~1 em cada 10 cortes chega a 80 (previa
+    # real de 16/11/2026: com 80, o automatico acharia menos de 1 corte por dia para 4 vagas).
+    "nota_minima_automatico": 70,
     "validade_automatico_dias": 3, # corte mais velho que isso nao entra mais no automatico (fica para revisao)
     # Busca diaria
     "busca_ativa": 0,              # 1: busca sozinha todo dia e manda os melhores para a fila (gasta creditos de IA)
