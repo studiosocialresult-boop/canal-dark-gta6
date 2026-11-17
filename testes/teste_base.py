@@ -2541,6 +2541,15 @@ class TesteBuscaDiaria(unittest.TestCase):
         self.assertEqual([r["id_externo"] for r in ranking], ["aaaaaaaaaa1", "aaaaaaaaaa3"])
         self.assertAlmostEqual(ranking[0]["velocidade"], 33333.3, delta=1)
 
+    def test_ranking_poe_os_brasileiros_primeiro(self):
+        lista = [self.cand("bbbbbbbbbb1", 5, 900_000, titulo="GTA 6 insane police chase"),
+                 self.cand("bbbbbbbbbb2", 5, 100_000, titulo="GTA 6: segredos que você não viu"),
+                 self.cand("bbbbbbbbbb3", 5, 50_000, titulo="GTA 6 o mapa é gigante"),
+                 self.cand("bbbbbbbbbb4", 5, 300_000, titulo="GTA 6 secretos que no viste")]
+        ranking = self.d.montar_ranking(lista, 48, self.agora)
+        self.assertEqual([r["id_externo"] for r in ranking],
+                         ["bbbbbbbbbb2", "bbbbbbbbbb3", "bbbbbbbbbb1", "bbbbbbbbbb4"])
+
     def test_filtro_de_titulo_so_aceita_gta_6(self):
         self.assertTrue(self.d.TITULO_GTA.search("GTA VI trailer"))
         self.assertFalse(self.d.TITULO_GTA.search("GTA V mods"))

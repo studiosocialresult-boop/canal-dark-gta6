@@ -27,7 +27,8 @@ log = config.criar_log("busca")
 # As CONSULTAS_HOJE primeiras tambem sao buscadas com o filtro "hoje" (no lancamento, o dia muda rapido).
 CONSULTAS = ["GTA 6", "GTA VI", "GTA 6 gameplay", "GTA 6 notícias", "GTA 6 novidades", "GTA 6 trailer",
              # com o jogo lancado (19/11/2026), o assunto passa a ser o que se faz dentro dele
-             "GTA 6 dicas", "GTA 6 segredos", "GTA 6 detalhes", "GTA 6 easter eggs", "GTA 6 análise", "GTA 6 review"]
+             "GTA 6 dicas", "GTA 6 segredos", "GTA 6 detalhes", "GTA 6 easter eggs", "GTA 6 análise", "GTA 6 review",
+             "GTA 6 em português", "GTA 6 PT-BR"]
 CONSULTAS_HOJE = 3
 FILTRO_SEMANA = "CAMSBAgDEAE%253D"       # ordenar por visualizacoes + enviados esta semana + so videos
 FILTRO_HOJE = "CAMSBAgCEAE%253D"         # ordenar por visualizacoes + enviados hoje + so videos
@@ -42,6 +43,24 @@ TITULO_GTA = re.compile(r"(gta|grand theft auto)\s*(6|vi)\b", re.IGNORECASE)    
 TITULO_SPOILER = re.compile(
     r"\b(ending|final do jogo|final da hist[oó]ria|final explicado|all cutscenes|todas as cutscenes|"
     r"game movie|filme completo)\b", re.IGNORECASE)
+# Videos de canais brasileiros vem primeiro na fila (o audio original ja sai em portugues).
+# O YouTube nao diz o pais do canal na busca, entao o sinal e o titulo: letras e palavras que so o
+# portugues usa (evita confundir com espanhol, que divide muitas palavras curtas).
+LETRAS_PT = re.compile(r"[ãõçêôà]", re.IGNORECASE)
+PALAVRAS_PT = re.compile(
+    r"\b(é|pré|tem|t[aá]|galera|mano|vou|fui|pt-?br|ao vivo|brasil|baixando|dublado|n[aã]o|voc[eê]s?|s[aã]o|pra|tamb[eé]m|at[eé]|ningu[eé]m|muito|muita|mais|novo|nova|novos|novas|"
+    r"jogo|jogando|jogar|coisas?|isso|isto|vazou|vazaram|vazamento|chegou|finalmente|primeira|primeiro|"
+    r"melhores?|detalhes|segredos|dicas|not[ií]cias|novidades|an[aá]lise|olha|olhem|incr[ií]vel|"
+    r"ningu[eé]m|ainda|agora|aqui|tudo|todos|ser[aá]|vai|vem|fiz|fizeram|achei|testei)\b", re.IGNORECASE)
+REGIAO_BUSCA = "&hl=pt-BR&gl=BR"         # pede ao YouTube os resultados como se fosse do Brasil
+
+
+def parece_brasileiro(titulo: str) -> bool:
+    """Verdadeiro se o titulo parece estar em portugues."""
+    titulo = titulo or ""
+    return bool(LETRAS_PT.search(titulo) or PALAVRAS_PT.search(titulo))
+
+
 MAX_TENTATIVAS_POR_DIA = 3
 ESPERA_ENTRE_TENTATIVAS = timedelta(minutes=30)
 
@@ -66,7 +85,7 @@ def _de_texto_utc(texto: str) -> datetime:
 
 def _buscar_no_youtube(consulta: str, filtro: str) -> list[dict]:
     """Resultados de uma pesquisa do YouTube (id, titulo, canal, views, duracao). Falha vira lista vazia."""
-    endereco = f"https://www.youtube.com/results?search_query={consulta.replace(' ', '+')}&sp={filtro}"
+    endereco = f"https://www.youtube.com/results?search_query={consulta.replace(' ', '+')}&sp={filtro}{REGIAO_BUSCA}"
     try:
         saida = perfil._yt_dlp(["--flat-playlist", "--playlist-end", str(POR_CONSULTA), "-J", endereco])
         dados = json.loads(saida[saida.index("{"):])
@@ -116,7 +135,8 @@ def coletar_canais(usuario_id: int) -> list[dict]:
 # ---------- ranking ----------
 
 def montar_ranking(candidatos: list[dict], janela_h: float, agora: datetime | None = None) -> list[dict]:
-    """Calcula horas e velocidade, tira os fora da janela e ordena pelos que mais crescem."""
+    """Calcula horas e velocidade, tira os fora da janela e ordena: primeiro os brasileiros, depois
+    os de fora, cada grupo dos que mais crescem para os que menos crescem."""
     agora = agora or _agora_utc()
     unicos: dict[str, dict] = {}
     for c in candidatos:
@@ -132,11 +152,12 @@ def montar_ranking(candidatos: list[dict], janela_h: float, agora: datetime | No
         if horas > janela_h or horas < 0:
             continue
         item = dict(c, horas=round(max(horas, 0), 1),
-                    velocidade=perfil.velocidade(c["views"], c["publicado"], agora))
+                    velocidade=perfil.velocidade(c["views"], c["publicado"], agora),
+                    brasileiro=parece_brasileiro(c.get("titulo")))
         antigo = unicos.get(c["id_externo"])
         if antigo is None or (item["origem"] == "canal" and antigo["origem"] != "canal"):
             unicos[c["id_externo"]] = item
-    return sorted(unicos.values(), key=lambda i: -(i["velocidade"] or 0))
+    return sorted(unicos.values(), key=lambda i: (not i["brasileiro"], -(i["velocidade"] or 0)))
 
 
 def _aceleracao(usuario_id: int, item: dict, agora: datetime) -> float | None:
